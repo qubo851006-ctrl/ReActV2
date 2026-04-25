@@ -1,9 +1,9 @@
-import type { Stage } from '../types'
+import type { Stage, SkillKey } from '../types'
 
 interface Props {
   stage: Stage
   useKb: boolean
-  onSkill: (skill: 'training' | 'ledger' | 'auth' | 'merge' | 'audit') => void
+  onSkill: (skill: SkillKey) => void
   onClearLedger: () => void
   onClearChat: () => void
   onToggleKb: (v: boolean) => void

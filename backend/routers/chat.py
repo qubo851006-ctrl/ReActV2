@@ -9,6 +9,110 @@ from llm_client import get_llm_client
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
+# 合法的意图名称集合，新增意图只需在此处和 INTENT_DESCRIPTIONS 中各加一行
+_VALID_INTENTS = {
+    "download_training_excel",
+    "download_ledger_excel",
+    "waiting_files",
+    "waiting_ledger_files",
+    "waiting_auth_file",
+    "other",
+}
+
+_INTENT_DESCRIPTIONS = """- download_training_excel：用户想下载或导出培训统计表、培训台账、培训记录 Excel
+- download_ledger_excel：用户想下载或导出案件台账、诉讼台账 Excel
+- waiting_files：用户想统计培训签到、归档培训文件、新增培训记录（需上传文件，不是单纯下载）
+- waiting_ledger_files：用户想处理案件台账、整理法律文书、新增案件记录（需上传文书，不是单纯下载）
+- waiting_auth_file：用户想起草授权请示、根据呈批件生成授权文件
+- other：以上都不符合，或用户只是聊天提问"""
+
+
+# 通用对话可以主动触发的 stage（不含下载类，下载已由意图检测拦截）
+_ACTIONABLE_STAGES = {
+    "waiting_files",
+    "waiting_ledger_files",
+    "waiting_auth_file",
+    "waiting_ledger_merge_files",
+    "waiting_audit_file",
+}
+
+_WORKFLOW_HINTS = """\
+- waiting_files：用户有培训通知/签到表需要统计归档
+- waiting_ledger_files：用户有法律文书（起诉状/判决书/裁定书/强制执行申请）需要录入台账
+- waiting_auth_file：用户需要根据呈批件起草授权请示或授权书
+- waiting_ledger_merge_files：用户需要合并合同/采购/财务多个系统导出的台账 Excel
+- waiting_audit_file：用户需要对审计发现问题进行 AI 分类分析"""
+
+
+def _classify_intent(client, message: str) -> str:
+    """单次 LLM 调用识别意图，取代原来的 5 次独立检测调用。"""
+    system_prompt = (
+        f"你是意图分类器。根据用户消息，从以下意图中选择最匹配的一个，"
+        f"只返回意图名称，不要有任何其他内容：\n\n{_INTENT_DESCRIPTIONS}"
+    )
+    resp = client.chat.completions.create(
+        model=MODEL_CHAT,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": message},
+        ],
+        max_tokens=20,
+    )
+    intent = resp.choices[0].message.content.strip().lower()
+    return intent if intent in _VALID_INTENTS else "other"
+
+
+def _general_chat(client, message: str, history: list) -> tuple[str, str]:
+    """
+    轻量 ReAct 通用对话：LLM 在单次调用中同时完成思考（Thought）和行动决策（Action）。
+
+    - reply：返回给用户的自然语言回复
+    - next_stage：若 LLM 判断用户有明确工作流需求则填入 stage 名，否则为 'idle'
+
+    与原来纯文本回复的区别：LLM 现在知道系统有哪些功能，能主动引导用户，
+    而不是总回复"请点击左侧卡片"这类无信息的提示。
+    """
+    system_prompt = f"""你是法务合规部的智能助手，负责回答问题并在适当时引导用户使用对应功能。
+
+可触发的功能（仅当用户有明确需求时才填 next_stage）：
+{_WORKFLOW_HINTS}
+
+请严格用以下 JSON 格式回复，不要输出任何 JSON 以外的内容：
+{{
+  "reply": "对用户的回复，简洁友好，使用中文",
+  "next_stage": "填入上方功能名称之一，或填 null 表示普通对话"
+}}
+
+注意：
+- 只有当你确信用户有明确的操作需求时才填 next_stage，避免过度推销
+- 如果用户描述模糊，先追问澄清，next_stage 填 null
+- 不要提"点击按钮"等界面操作，只需说明系统可以帮用户做什么"""
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in history[-10:]:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": message})
+
+    resp = client.chat.completions.create(model=MODEL_CHAT, messages=messages)
+    raw = resp.choices[0].message.content.strip()
+
+    # 解析 JSON；若模型输出不规范则降级为纯文本，next_stage 置 idle
+    try:
+        # 处理模型可能返回的 markdown 代码块包裹
+        clean = raw
+        if clean.startswith("```"):
+            parts = clean.split("```")
+            clean = parts[1].lstrip("json").strip() if len(parts) > 1 else clean
+        data = json.loads(clean)
+        reply = str(data.get("reply") or raw)
+        stage = data.get("next_stage") or "idle"
+        next_stage = stage if stage in _ACTIONABLE_STAGES else "idle"
+    except Exception:
+        reply = raw
+        next_stage = "idle"
+
+    return reply, next_stage
+
 
 def load_history() -> list:
     p = Path(CHAT_HISTORY_PATH)
@@ -89,102 +193,50 @@ def chat(req: ChatRequest):
 
     client = get_llm_client()
 
-    # 意图识别
-    def detect_intent(system_content: str) -> bool:
-        resp = client.chat.completions.create(
-            model=MODEL_CHAT,
-            messages=[
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": req.message},
-            ],
-            max_tokens=5,
-        )
-        return resp.choices[0].message.content.strip().upper().startswith("Y")
+    # 单次 LLM 调用识别意图（原来需要 5 次调用）
+    intent = _classify_intent(client, req.message)
 
-    # 下载意图优先检测（必须在处理类意图之前，避免被误拦截）
-    if detect_intent(
-        '你是一个意图识别助手。判断用户的消息是否表达了想要下载或导出培训统计表、培训台账、培训记录Excel的意图。'
-        '关键词包括：下载、导出、获取、统计表、培训台账、培训记录、Excel。'
-        '注意：如果用户说的是"导出培训台账"、"下载统计表"、"获取培训Excel"等，应判断为YES。'
-        '只回复 YES 或 NO。'
-    ):
-        reply = "📥 正在为您打开培训统计表下载…"
-        history.append({"role": "user", "content": req.message})
-        history.append({"role": "assistant", "content": reply})
-        save_history(history)
-        return {"reply": reply, "next_stage": "download_training_excel", "kb_conversation_id": ""}
-
-    if detect_intent(
-        '你是一个意图识别助手。判断用户的消息是否表达了想要下载或导出案件台账、诉讼台账Excel的意图。'
-        '关键词包括：下载、导出、获取、案件台账、诉讼台账、台账Excel。'
-        '注意：如果用户说的是"导出案件台账"、"下载台账"等，应判断为YES。'
-        '只回复 YES 或 NO。'
-    ):
-        reply = "📥 正在为您打开案件台账下载…"
-        history.append({"role": "user", "content": req.message})
-        history.append({"role": "assistant", "content": reply})
-        save_history(history)
-        return {"reply": reply, "next_stage": "download_ledger_excel", "kb_conversation_id": ""}
-
-    if detect_intent(
-        '你是一个意图识别助手。判断用户的消息是否表达了需要进行培训统计或归档处理的意图。'
-        '包括但不限于：刚组织完培训想记录、要统计签到人数、需要归档培训文件、上传培训材料等。'
-        '注意：纯粹的下载/导出请求不算，只有涉及上传文件、新增记录才算YES。只回复 YES 或 NO。'
-    ):
-        reply = (
+    # 意图 → 回复 + 下一阶段的映射表
+    INTENT_RESPONSES = {
+        "download_training_excel": (
+            "📥 正在为您打开培训统计表下载…",
+            "download_training_excel",
+        ),
+        "download_ledger_excel": (
+            "📥 正在为您打开案件台账下载…",
+            "download_ledger_excel",
+        ),
+        "waiting_files": (
             "好的！请上传以下两个文件：\n\n"
             "- 📄 **培训通知**（PDF 格式）\n"
-            "- ✍️ **签到表**（图片格式：JPG / PNG）"
-        )
-        history.append({"role": "user", "content": req.message})
-        history.append({"role": "assistant", "content": reply})
-        save_history(history)
-        return {"reply": reply, "next_stage": "waiting_files", "kb_conversation_id": ""}
-
-    if detect_intent(
-        '你是一个意图识别助手。判断用户的消息是否表达了需要生成案件台账、整理诉讼案件材料、'
-        '提取案件信息或生成法务台账的意图。注意：纯粹的下载/导出请求不算，只有涉及上传文书、新增案件才算YES。只回复 YES 或 NO。'
-    ):
-        reply = (
+            "- ✍️ **签到表**（图片格式：JPG / PNG）",
+            "waiting_files",
+        ),
+        "waiting_ledger_files": (
             "好的！请上传案件的法律文书文件（支持 **PDF / DOCX / DOC**，可多选）。\n\n"
             "系统会自动识别文书类型，并判断是否为台账中的已有案件：\n"
             "- 已有案件：追加审级处理结果或更新执行信息\n"
-            "- 新案件：在台账末尾新增一行"
-        )
-        history.append({"role": "user", "content": req.message})
-        history.append({"role": "assistant", "content": reply})
-        save_history(history)
-        return {"reply": reply, "next_stage": "waiting_ledger_files", "kb_conversation_id": ""}
-
-    if detect_intent(
-        '你是一个意图识别助手。判断用户的消息是否表达了需要起草授权请示、'
-        '根据呈批件生成授权文件、或处理项目授权相关公文的意图。只回复 YES 或 NO。'
-    ):
-        reply = (
+            "- 新案件：在台账末尾新增一行",
+            "waiting_ledger_files",
+        ),
+        "waiting_auth_file": (
             "好的！请上传**呈批件 PDF**，系统将自动提取关键信息并生成授权请示 Word 文档。\n\n"
             "- 支持文字版 PDF（直接提取）\n"
-            "- 支持扫描版 PDF（自动 OCR 识别）"
-        )
+            "- 支持扫描版 PDF（自动 OCR 识别）",
+            "waiting_auth_file",
+        ),
+    }
+
+    if intent in INTENT_RESPONSES:
+        reply, next_stage = INTENT_RESPONSES[intent]
         history.append({"role": "user", "content": req.message})
         history.append({"role": "assistant", "content": reply})
         save_history(history)
-        return {"reply": reply, "next_stage": "waiting_auth_file", "kb_conversation_id": ""}
+        return {"reply": reply, "next_stage": next_stage, "kb_conversation_id": ""}
 
-    # 通用对话
-    system_prompt = (
-        '你是一个培训统计助手，服务于企业内部培训管理工作。'
-        '你可以回答用户的各类问题，也可以帮助用户完成培训签到统计和文件归档。'
-        '重要提示：这是一个网页应用，如果用户想进行培训统计，请引导他们点击左侧的技能卡片，或直接说出需求即可自动触发。'
-        '不要描述不存在的按钮或附件功能。回答简洁友好，使用中文。'
-    )
-    messages = [{"role": "system", "content": system_prompt}]
-    for msg in history[-10:]:
-        messages.append({"role": msg["role"], "content": msg["content"]})
-    messages.append({"role": "user", "content": req.message})
-    resp = client.chat.completions.create(model=MODEL_CHAT, messages=messages)
-    reply = resp.choices[0].message.content.strip()
-
+    # 通用对话（轻量 ReAct：LLM 在单次调用中回复并决定是否触发工作流）
+    reply, next_stage = _general_chat(client, req.message, history)
     history.append({"role": "user", "content": req.message})
     history.append({"role": "assistant", "content": reply})
     save_history(history)
-    return {"reply": reply, "next_stage": "idle", "kb_conversation_id": ""}
+    return {"reply": reply, "next_stage": next_stage, "kb_conversation_id": ""}

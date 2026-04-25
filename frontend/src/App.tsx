@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import type { Message, Stage } from './types'
+import type { ComponentType } from 'react'
+import type { Message, Stage, FlowProps, SkillKey } from './types'
 import { getHistory, clearHistory, sendChat, clearLedger, downloadTrainingExcel, downloadLedgerExcel } from './api'
 import Sidebar from './components/Sidebar'
 import ChatMessage from './components/ChatMessage'
@@ -9,6 +10,50 @@ import AuthFlow from './components/AuthFlow'
 import LedgerMergeFlow from './components/LedgerMergeFlow'
 import AuditFlow from './components/AuditFlow'
 import VersionPanel from './components/VersionPanel'
+
+// 新增 Flow 组件：在此表加一行，不改 App 主逻辑
+const FLOW_COMPONENTS: Partial<Record<Stage, ComponentType<FlowProps>>> = {
+  waiting_files: TrainingFlow,
+  waiting_ledger_files: LedgerFlow,
+  waiting_auth_file: AuthFlow,
+  waiting_ledger_merge_files: LedgerMergeFlow,
+  waiting_audit_file: AuditFlow,
+}
+
+// 新增下载功能：在此表加一行，不改 App 主逻辑
+const DOWNLOAD_ACTIONS: Partial<Record<Stage, { label: string; fn: () => void }>> = {
+  download_training_excel: { label: '下载培训统计表 Excel', fn: downloadTrainingExcel },
+  download_ledger_excel: { label: '下载案件台账 Excel', fn: downloadLedgerExcel },
+}
+
+// 侧边栏技能按钮触发配置（新增技能在此加一行，并在 types.ts 的 SkillKey 里加成员）
+const SKILL_TRIGGERS: Record<SkillKey, { msg: string; reply: string; stage: Stage }> = {
+  training: {
+    msg: '📊 培训统计及归档',
+    reply: '好的！请上传以下两个文件：\n\n- 📄 **培训通知**（PDF 格式）\n- ✍️ **签到表**（图片格式：JPG / PNG）',
+    stage: 'waiting_files',
+  },
+  ledger: {
+    msg: '⚖️ 案件台账生成',
+    reply: '好的！请上传案件的法律文书文件（支持 **PDF / DOCX / DOC**，可多选）。\n\n系统会自动识别文书类型，并判断是否为台账中的已有案件。',
+    stage: 'waiting_ledger_files',
+  },
+  auth: {
+    msg: '📝 授权请示起草',
+    reply: '好的！请上传**呈批件 PDF**，系统将自动提取关键信息并生成授权请示 Word 文档。\n\n- 支持文字版 PDF（直接提取）\n- 支持扫描版 PDF（自动 OCR 识别）',
+    stage: 'waiting_auth_file',
+  },
+  merge: {
+    msg: '🔀 三台账合并',
+    reply: '好的！请分别上传三个系统导出的 Excel 台账：\n\n- 📘 **合同系统台账**（必填，作为合并主键）\n- 📗 **采购系统台账**（可选）\n- 📙 **财务系统台账**（可选）\n\n系统将以合同编号为关键字段自动合并，支持大小写、全角括号等差异的模糊匹配。',
+    stage: 'waiting_ledger_merge_files',
+  },
+  audit: {
+    msg: '🔍 审计问题分析',
+    reply: '好的！请上传**审计发现问题汇总表**（Excel 格式），系统将自动识别问题列，通过 AI 对每条问题进行**双维度分类**：\n\n- 📌 **问题类别**（内控缺陷 / 制度执行 / 资金管理 / 采购管理）\n- 🏢 **业务领域**（工程业务 / 酒店业务 / 物业管理 / 资产管理）\n\n分类完成后可审查修改，并生成可视化分析报告。',
+    stage: 'waiting_audit_file',
+  },
+}
 
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
@@ -55,35 +100,8 @@ export default function App() {
     }
   }
 
-  function triggerSkill(skill: 'training' | 'ledger' | 'auth' | 'merge' | 'audit') {
-    const map = {
-      training: {
-        msg: '📊 培训统计及归档',
-        reply: '好的！请上传以下两个文件：\n\n- 📄 **培训通知**（PDF 格式）\n- ✍️ **签到表**（图片格式：JPG / PNG）',
-        stage: 'waiting_files' as Stage,
-      },
-      ledger: {
-        msg: '⚖️ 案件台账生成',
-        reply: '好的！请上传案件的法律文书文件（支持 **PDF / DOCX / DOC**，可多选）。\n\n系统会自动识别文书类型，并判断是否为台账中的已有案件。',
-        stage: 'waiting_ledger_files' as Stage,
-      },
-      auth: {
-        msg: '📝 授权请示起草',
-        reply: '好的！请上传**呈批件 PDF**，系统将自动提取关键信息并生成授权请示 Word 文档。\n\n- 支持文字版 PDF（直接提取）\n- 支持扫描版 PDF（自动 OCR 识别）',
-        stage: 'waiting_auth_file' as Stage,
-      },
-      merge: {
-        msg: '🔀 三台账合并',
-        reply: '好的！请分别上传三个系统导出的 Excel 台账：\n\n- 📘 **合同系统台账**（必填，作为合并主键）\n- 📗 **采购系统台账**（可选）\n- 📙 **财务系统台账**（可选）\n\n系统将以合同编号为关键字段自动合并，支持大小写、全角括号等差异的模糊匹配。',
-        stage: 'waiting_ledger_merge_files' as Stage,
-      },
-      audit: {
-        msg: '🔍 审计问题分析',
-        reply: '好的！请上传**审计发现问题汇总表**（Excel 格式），系统将自动识别问题列，通过 AI 对每条问题进行**双维度分类**：\n\n- 📌 **问题类别**（内控缺陷 / 制度执行 / 资金管理 / 采购管理）\n- 🏢 **业务领域**（工程业务 / 酒店业务 / 物业管理 / 资产管理）\n\n分类完成后可审查修改，并生成可视化分析报告。',
-        stage: 'waiting_audit_file' as Stage,
-      },
-    }
-    const { msg, reply, stage: nextStage } = map[skill]
+  function triggerSkill(skill: SkillKey) {
+    const { msg, reply, stage: nextStage } = SKILL_TRIGGERS[skill]
     addMessage('user', msg)
     addMessage('assistant', reply)
     setStage(nextStage)
@@ -111,7 +129,9 @@ export default function App() {
   }
 
   const isIdle = stage === 'idle'
-  const isDownloadStage = stage === 'download_training_excel' || stage === 'download_ledger_excel'
+  const isDownloadStage = stage in DOWNLOAD_ACTIONS
+  const ActiveFlow = FLOW_COMPONENTS[stage]
+  const activeDownload = DOWNLOAD_ACTIONS[stage]
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-slate-950">
@@ -152,57 +172,23 @@ export default function App() {
             <ChatMessage key={i} message={msg} />
           ))}
 
-          {/* Stage-specific inline panels */}
-          {stage === 'waiting_files' && (
-            <TrainingFlow
-              onComplete={reply => { addMessage('assistant', reply); setStage('idle') }}
-              onCancel={handleCancel}
-            />
-          )}
-          {stage === 'waiting_ledger_files' && (
-            <LedgerFlow
-              onComplete={reply => { addMessage('assistant', reply); setStage('idle') }}
-              onCancel={handleCancel}
-            />
-          )}
-          {stage === 'waiting_auth_file' && (
-            <AuthFlow
-              onComplete={reply => { addMessage('assistant', reply); setStage('idle') }}
-              onCancel={handleCancel}
-            />
-          )}
-          {stage === 'waiting_ledger_merge_files' && (
-            <LedgerMergeFlow
-              onComplete={reply => { addMessage('assistant', reply); setStage('idle') }}
-              onCancel={handleCancel}
-            />
-          )}
-          {stage === 'waiting_audit_file' && (
-            <AuditFlow
+          {/* Flow 面板：由 FLOW_COMPONENTS 表驱动，新增功能不改此处 */}
+          {ActiveFlow && (
+            <ActiveFlow
               onComplete={reply => { addMessage('assistant', reply); setStage('idle') }}
               onCancel={handleCancel}
             />
           )}
 
-          {stage === 'download_training_excel' && (
+          {/* 下载按钮：由 DOWNLOAD_ACTIONS 表驱动，新增下载不改此处 */}
+          {activeDownload && (
             <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5 my-3">
-              <div className="text-sm text-slate-300 mb-3">点击下载培训统计表：</div>
+              <div className="text-sm text-slate-300 mb-3">点击下载：</div>
               <button
-                onClick={() => { downloadTrainingExcel(); setStage('idle') }}
+                onClick={() => { activeDownload.fn(); setStage('idle') }}
                 className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-lg transition-colors"
               >
-                📥 下载培训统计表 Excel
-              </button>
-            </div>
-          )}
-          {stage === 'download_ledger_excel' && (
-            <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5 my-3">
-              <div className="text-sm text-slate-300 mb-3">点击下载案件台账：</div>
-              <button
-                onClick={() => { downloadLedgerExcel(); setStage('idle') }}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-lg transition-colors"
-              >
-                📥 下载案件台账 Excel
+                📥 {activeDownload.label}
               </button>
             </div>
           )}

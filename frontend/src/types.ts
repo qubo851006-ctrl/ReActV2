@@ -18,6 +18,15 @@ export interface Message {
   content: string
 }
 
+/** 所有 Flow 组件共享的 props 接口 */
+export interface FlowProps {
+  onComplete: (reply: string) => void
+  onCancel: () => void
+}
+
+/** 侧边栏技能按钮的 key，新增技能在此加一个联合类型成员 */
+export type SkillKey = 'training' | 'ledger' | 'auth' | 'merge' | 'audit'
+
 export interface TrainingResult {
   topic: string
   location: string
