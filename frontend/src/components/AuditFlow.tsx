@@ -154,7 +154,7 @@ function PieSection({
             ))}
           </Pie>
           <Tooltip
-            formatter={(value) => [`${value}项`, '数量']}
+            formatter={(value) => [`${value}项`, '数量'] as [string, string]}
             contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }}
           />
           <Legend wrapperStyle={{ color: '#94a3b8', fontSize: 12 }} />
