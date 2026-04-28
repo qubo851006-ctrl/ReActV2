@@ -16,6 +16,7 @@ _VALID_INTENTS = {
     "waiting_files",
     "waiting_ledger_files",
     "waiting_auth_file",
+    "query_company",
     "other",
 }
 
@@ -24,6 +25,7 @@ _INTENT_DESCRIPTIONS = """- download_training_excel：用户想下载或导出�
 - waiting_files：用户想统计培训签到、归档培训文件、新增培训记录（需上传文件，不是单纯下载）
 - waiting_ledger_files：用户想处理案件台账、整理法律文书、新增案件记录（需上传文书，不是单纯下载）
 - waiting_auth_file：用户想起草授权请示、根据呈批件生成授权文件
+- query_company：用户想查询某个具体中国企业/公司的工商信息、司法风险、股东信息等，必须提及具体公司名称才算此意图
 - other：以上都不符合，或用户只是聊天提问"""
 
 
@@ -226,6 +228,33 @@ def chat(req: ChatRequest):
             "waiting_auth_file",
         ),
     }
+
+    # ── 企业信息查询（需动态提取名称 + MCP 调用，不能放 INTENT_RESPONSES 静态表）──
+    if intent == "query_company":
+        name_resp = client.chat.completions.create(
+            model=MODEL_CHAT,
+            messages=[
+                {"role": "system", "content": (
+                    "从用户消息中提取要查询的中国企业名称，只输出企业名称，不要其他文字。"
+                    "示例：用户说【查比亚迪的风险】，只输出【比亚迪】。"
+                )},
+                {"role": "user", "content": req.message},
+            ],
+            max_tokens=30,
+        )
+        raw_name = name_resp.choices[0].message.content.strip()
+        try:
+            from utils.mcp_client import query_company, format_company_markdown
+            result = query_company(raw_name)
+            reply = format_company_markdown(result)
+        except ValueError as e:
+            reply = f"❌ 未找到匹配企业：{e}"
+        except Exception as e:
+            reply = f"❌ 企业信息查询失败：{e}"
+        history.append({"role": "user", "content": req.message})
+        history.append({"role": "assistant", "content": reply})
+        save_history(history)
+        return {"reply": reply, "next_stage": "idle", "kb_conversation_id": ""}
 
     if intent in INTENT_RESPONSES:
         reply, next_stage = INTENT_RESPONSES[intent]

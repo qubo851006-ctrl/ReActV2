@@ -149,7 +149,7 @@ export default function App() {
         {/* Header */}
         <div className="flex-shrink-0 px-6 py-4 border-b border-slate-700/50 bg-slate-900/50 backdrop-blur flex items-center justify-between">
           <div>
-            <h1 className="text-base font-semibold text-white m-0">法务合规部智能体V1</h1>
+            <h1 className="text-base font-semibold text-white m-0">法务合规部智能体V2</h1>
             <p className="text-xs text-slate-500 mt-0.5">AI 驱动的企业培训与法务管理系统</p>
           </div>
           <button

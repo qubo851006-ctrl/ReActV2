@@ -26,7 +26,7 @@ export default function Sidebar({ stage, useKb, onSkill, onClearLedger, onClearC
         <div className="flex items-center gap-2">
           <span className="text-2xl">📋</span>
           <div>
-            <div className="text-sm font-semibold text-white leading-tight">法务合规部智能体V1</div>
+            <div className="text-sm font-semibold text-white leading-tight">法务合规部智能体V2</div>
             <div className="text-xs text-slate-400 mt-0.5">AI 驱动的智能管理工具</div>
           </div>
         </div>

@@ -1,5 +1,6 @@
 import type { Message } from '../types'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface Props {
   message: Message
@@ -25,12 +26,8 @@ export default function ChatMessage({ message }: Props) {
         {isUser ? (
           <span>{message.content}</span>
         ) : (
-          <div className="prose prose-sm prose-invert max-w-none
-            prose-p:my-1 prose-ul:my-1 prose-li:my-0.5
-            prose-table:text-xs prose-th:py-1.5 prose-td:py-1.5
-            prose-code:bg-slate-700 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs
-          ">
-            <ReactMarkdown>{message.content}</ReactMarkdown>
+          <div className="chat-md max-w-none text-sm text-slate-200">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
           </div>
         )}
       </div>
