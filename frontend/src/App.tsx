@@ -87,13 +87,50 @@ export default function App() {
     addMessage('user', text)
     setSending(true)
     setStage('thinking')
+
+    let gotFirstChunk = false
+    let accumulated = ''
+
     try {
-      const res = await sendChat(text, useKb, kbConvId)
-      addMessage('assistant', res.reply)
+      const res = await sendChat(text, useKb, kbConvId, (chunk) => {
+        accumulated += chunk
+        if (!gotFirstChunk) {
+          gotFirstChunk = true
+          setStage('idle')
+          addMessage('assistant', accumulated)
+        } else {
+          setMessages(prev => {
+            const updated = [...prev]
+            updated[updated.length - 1] = { role: 'assistant', content: accumulated }
+            return updated
+          })
+        }
+      })
+
+      if (res.reply) {
+        if (gotFirstChunk) {
+          setMessages(prev => {
+            const updated = [...prev]
+            updated[updated.length - 1] = { role: 'assistant', content: res.reply }
+            return updated
+          })
+        } else {
+          addMessage('assistant', res.reply)
+        }
+      }
+
       if (res.kb_conversation_id) setKbConvId(res.kb_conversation_id)
       setStage(res.next_stage as Stage)
     } catch {
-      addMessage('assistant', '❌ 请求失败，请检查后端服务是否启动。')
+      if (gotFirstChunk) {
+        setMessages(prev => {
+          const updated = [...prev]
+          updated[updated.length - 1] = { role: 'assistant', content: '❌ 请求失败，请检查后端服务是否启动。' }
+          return updated
+        })
+      } else {
+        addMessage('assistant', '❌ 请求失败，请检查后端服务是否启动。')
+      }
       setStage('idle')
     } finally {
       setSending(false)

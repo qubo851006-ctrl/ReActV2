@@ -11,13 +11,44 @@ export async function clearHistory() {
   await fetch(`${BASE}/chat/history`, { method: 'DELETE' })
 }
 
-export async function sendChat(message: string, useKb: boolean, kbConvId: string) {
-  const r = await fetch(`${BASE}/chat`, {
+export async function sendChat(
+  message: string,
+  useKb: boolean,
+  kbConvId: string,
+  onChunk: (text: string) => void,
+): Promise<{ reply: string; next_stage: string; kb_conversation_id: string }> {
+  const resp = await fetch(`${BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, use_kb: useKb, kb_conversation_id: kbConvId }),
   })
-  return r.json()
+  if (!resp.ok) throw new Error(await resp.text())
+
+  const reader = resp.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result = { reply: '', next_stage: 'idle', kb_conversation_id: '' }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop()!
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      try {
+        const data = JSON.parse(line.slice(6))
+        if (data.type === 'chunk') onChunk(data.text)
+        else if (data.type === 'done') result = {
+          reply: data.reply ?? '',
+          next_stage: data.next_stage ?? 'idle',
+          kb_conversation_id: data.kb_conversation_id ?? '',
+        }
+      } catch { /* ignore malformed */ }
+    }
+  }
+  return result
 }
 
 // ── 培训统计 ──────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import httpx
 
@@ -9,7 +10,7 @@ from llm_client import get_llm_client
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
-# 合法的意图名称集合，新增意图只需在此处和 INTENT_DESCRIPTIONS 中各加一行
+# ── 意图集合（新增意图在此加一行）────────────────────────────────
 _VALID_INTENTS = {
     "download_training_excel",
     "download_ledger_excel",
@@ -20,16 +21,15 @@ _VALID_INTENTS = {
     "other",
 }
 
-_INTENT_DESCRIPTIONS = """- download_training_excel：用户想下载或导出培训统计表、培训台账、培训记录 Excel
+# 工作流意图描述（供 _classify 使用，不含 query_company / other）
+_INTENT_DESCRIPTIONS_WORKFLOW = """\
+- download_training_excel：用户想下载或导出培训统计表、培训台账、培训记录 Excel
 - download_ledger_excel：用户想下载或导出案件台账、诉讼台账 Excel
 - waiting_files：用户想统计培训签到、归档培训文件、新增培训记录（需上传文件，不是单纯下载）
 - waiting_ledger_files：用户想处理案件台账、整理法律文书、新增案件记录（需上传文书，不是单纯下载）
-- waiting_auth_file：用户想起草授权请示、根据呈批件生成授权文件
-- query_company：用户想查询某个具体中国企业/公司的工商信息、司法风险、股东信息等，必须提及具体公司名称才算此意图
-- other：以上都不符合，或用户只是聊天提问"""
+- waiting_auth_file：用户想起草授权请示、根据呈批件生成授权文件"""
 
-
-# 通用对话可以主动触发的 stage（不含下载类，下载已由意图检测拦截）
+# 通用对话可以主动触发的 stage
 _ACTIONABLE_STAGES = {
     "waiting_files",
     "waiting_ledger_files",
@@ -46,75 +46,98 @@ _WORKFLOW_HINTS = """\
 - waiting_audit_file：用户需要对审计发现问题进行 AI 分类分析"""
 
 
-def _classify_intent(client, message: str) -> str:
-    """单次 LLM 调用识别意图，取代原来的 5 次独立检测调用。"""
-    system_prompt = (
-        f"你是意图分类器。根据用户消息，从以下意图中选择最匹配的一个，"
-        f"只返回意图名称，不要有任何其他内容：\n\n{_INTENT_DESCRIPTIONS}"
-    )
+# ── 辅助函数 ─────────────────────────────────────────────────────
+
+def _sse(data: dict) -> str:
+    """格式化 SSE 事件行。"""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _append_and_save(history: list, user_msg: str, assistant_msg: str):
+    history.append({"role": "user", "content": user_msg})
+    history.append({"role": "assistant", "content": assistant_msg})
+    save_history(history)
+
+
+# ── LLM 调用函数 ─────────────────────────────────────────────────
+
+def _classify(client, message: str) -> dict:
+    """
+    【优化2+3】单次 LLM 调用，同时完成意图识别、公司名提取、next_stage 判断。
+
+    返回格式：
+      {"intent": "waiting_files"}                           # 工作流意图
+      {"intent": "query_company", "company": "比亚迪"}      # 企业查询（含公司名）
+      {"intent": "other", "next_stage": null}              # 普通对话
+    """
+    system_prompt = f"""你是法务合规部的智能助手意图分析器。只返回 JSON，不要其他内容。
+
+【工作流意图】格式：{{"intent": "意图名"}}
+{_INTENT_DESCRIPTIONS_WORKFLOW}
+
+【企业查询】格式：{{"intent": "query_company", "company": "企业名称"}}
+条件：用户提及具体公司名称并想查询工商/司法等信息
+
+【普通对话】格式：{{"intent": "other", "next_stage": null}}
+next_stage 可选值（仅当用户有明确操作需求时填入，否则填 null）：
+waiting_files / waiting_ledger_files / waiting_auth_file / waiting_ledger_merge_files / waiting_audit_file"""
+
     resp = client.chat.completions.create(
         model=MODEL_CHAT,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": message},
         ],
-        max_tokens=20,
+        max_tokens=80,
     )
-    intent = resp.choices[0].message.content.strip().lower()
-    return intent if intent in _VALID_INTENTS else "other"
+    raw = resp.choices[0].message.content.strip()
+    try:
+        if raw.startswith("```"):
+            parts = raw.split("```")
+            raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
+        data = json.loads(raw)
+        intent = data.get("intent", "other")
+        if intent not in _VALID_INTENTS:
+            intent = "other"
+        return {
+            "intent": intent,
+            "company": data.get("company"),
+            "next_stage": data.get("next_stage"),
+        }
+    except Exception:
+        return {"intent": "other", "company": None, "next_stage": None}
 
 
-def _general_chat(client, message: str, history: list) -> tuple[str, str]:
+def _stream_reply(client, message: str, history: list):
     """
-    轻量 ReAct 通用对话：LLM 在单次调用中同时完成思考（Thought）和行动决策（Action）。
-
-    - reply：返回给用户的自然语言回复
-    - next_stage：若 LLM 判断用户有明确工作流需求则填入 stage 名，否则为 'idle'
-
-    与原来纯文本回复的区别：LLM 现在知道系统有哪些功能，能主动引导用户，
-    而不是总回复"请点击左侧卡片"这类无信息的提示。
+    【优化1】生成器：逐 token yield 文本块，供 SSE 流式推送。
+    替代原来的 _general_chat（不再要求 JSON 格式输出）。
     """
-    system_prompt = f"""你是法务合规部的智能助手，负责回答问题并在适当时引导用户使用对应功能。
+    system_prompt = f"""你是法务合规部的智能助手，请用中文简洁友好地回答用户问题。
 
-可触发的功能（仅当用户有明确需求时才填 next_stage）：
+可以引导用户使用的功能：
 {_WORKFLOW_HINTS}
 
-请严格用以下 JSON 格式回复，不要输出任何 JSON 以外的内容：
-{{
-  "reply": "对用户的回复，简洁友好，使用中文",
-  "next_stage": "填入上方功能名称之一，或填 null 表示普通对话"
-}}
-
-注意：
-- 只有当你确信用户有明确的操作需求时才填 next_stage，避免过度推销
-- 如果用户描述模糊，先追问澄清，next_stage 填 null
-- 不要提"点击按钮"等界面操作，只需说明系统可以帮用户做什么"""
+直接输出回复内容，不需要 JSON 格式。"""
 
     messages = [{"role": "system", "content": system_prompt}]
     for msg in history[-10:]:
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": message})
 
-    resp = client.chat.completions.create(model=MODEL_CHAT, messages=messages)
-    raw = resp.choices[0].message.content.strip()
+    stream = client.chat.completions.create(
+        model=MODEL_CHAT,
+        messages=messages,
+        stream=True,
+        max_tokens=500,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
 
-    # 解析 JSON；若模型输出不规范则降级为纯文本，next_stage 置 idle
-    try:
-        # 处理模型可能返回的 markdown 代码块包裹
-        clean = raw
-        if clean.startswith("```"):
-            parts = clean.split("```")
-            clean = parts[1].lstrip("json").strip() if len(parts) > 1 else clean
-        data = json.loads(clean)
-        reply = str(data.get("reply") or raw)
-        stage = data.get("next_stage") or "idle"
-        next_stage = stage if stage in _ACTIONABLE_STAGES else "idle"
-    except Exception:
-        reply = raw
-        next_stage = "idle"
 
-    return reply, next_stage
-
+# ── 历史记录 ─────────────────────────────────────────────────────
 
 def load_history() -> list:
     p = Path(CHAT_HISTORY_PATH)
@@ -135,13 +158,15 @@ def save_history(messages: list):
         pass
 
 
+# ── HTTP 端点 ────────────────────────────────────────────────────
+
 @router.get("/history")
 def get_history():
     saved = load_history()
     if not saved:
         saved = [{
             "role": "assistant",
-            "content": "你好！我是**培训统计助手**，可以帮您完成培训签到统计和文件归档，也可以回答您的各类问题。"
+            "content": "你好！我是**法务合规部智能助手**，可以帮您完成培训统计、案件台账、授权请示、企业信息查询等工作，也可以回答您的各类问题。"
         }]
     return {"messages": saved}
 
@@ -158,114 +183,109 @@ class ChatRequest(BaseModel):
     kb_conversation_id: str = ""
 
 
+# 固定意图 → 固定回复映射（直接返回，不需要额外 LLM 调用）
+INTENT_RESPONSES = {
+    "download_training_excel": (
+        "📥 正在为您打开培训统计表下载…",
+        "download_training_excel",
+    ),
+    "download_ledger_excel": (
+        "📥 正在为您打开案件台账下载…",
+        "download_ledger_excel",
+    ),
+    "waiting_files": (
+        "好的！请上传以下两个文件：\n\n"
+        "- 📄 **培训通知**（PDF 格式）\n"
+        "- ✍️ **签到表**（图片格式：JPG / PNG）",
+        "waiting_files",
+    ),
+    "waiting_ledger_files": (
+        "好的！请上传案件的法律文书文件（支持 **PDF / DOCX / DOC**，可多选）。\n\n"
+        "系统会自动识别文书类型，并判断是否为台账中的已有案件：\n"
+        "- 已有案件：追加审级处理结果或更新执行信息\n"
+        "- 新案件：在台账末尾新增一行",
+        "waiting_ledger_files",
+    ),
+    "waiting_auth_file": (
+        "好的！请上传**呈批件 PDF**，系统将自动提取关键信息并生成授权请示 Word 文档。\n\n"
+        "- 支持文字版 PDF（直接提取）\n"
+        "- 支持扫描版 PDF（自动 OCR 识别）",
+        "waiting_auth_file",
+    ),
+}
+
+
 @router.post("")
 def chat(req: ChatRequest):
-    history = load_history()
+    def generate():
+        history = load_history()
 
-    # 知识库模式
-    if req.use_kb:
-        try:
-            url = f"{ZHISHU_BASE_URL}/chat-messages"
-            headers = {
-                "Authorization": f"Bearer {ZHISHU_API_KEY}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "query": req.message,
-                "inputs": {},
-                "response_mode": "blocking",
-                "user": "training-manager",
-                "conversation_id": req.kb_conversation_id,
-            }
-            resp = httpx.post(url, json=payload, headers=headers, verify=False, timeout=120)
-            resp.raise_for_status()
-            data = resp.json()
-            reply = data.get("answer", "（知识库未返回内容）")
-            new_conv_id = data.get("conversation_id", "")
-            history.append({"role": "user", "content": req.message})
-            history.append({"role": "assistant", "content": reply})
-            save_history(history)
-            return {"reply": reply, "next_stage": "idle", "kb_conversation_id": new_conv_id}
-        except Exception as e:
-            reply = f"❌ 知识库查询失败：{e}"
-            history.append({"role": "user", "content": req.message})
-            history.append({"role": "assistant", "content": reply})
-            save_history(history)
-            return {"reply": reply, "next_stage": "idle", "kb_conversation_id": ""}
+        # ── 知识库模式（外部服务，无法流式）────────────────────────
+        if req.use_kb:
+            try:
+                url = f"{ZHISHU_BASE_URL}/chat-messages"
+                headers = {
+                    "Authorization": f"Bearer {ZHISHU_API_KEY}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "query": req.message,
+                    "inputs": {},
+                    "response_mode": "blocking",
+                    "user": "training-manager",
+                    "conversation_id": req.kb_conversation_id,
+                }
+                resp = httpx.post(url, json=payload, headers=headers, verify=False, timeout=120)
+                resp.raise_for_status()
+                data = resp.json()
+                reply = data.get("answer", "（知识库未返回内容）")
+                new_conv_id = data.get("conversation_id", "")
+            except Exception as e:
+                reply = f"❌ 知识库查询失败：{e}"
+                new_conv_id = ""
+            _append_and_save(history, req.message, reply)
+            yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": new_conv_id})
+            return
 
-    client = get_llm_client()
+        client = get_llm_client()
 
-    # 单次 LLM 调用识别意图（原来需要 5 次调用）
-    intent = _classify_intent(client, req.message)
+        # ── 单次分类调用（优化2+3）───────────────────────────────────
+        cls = _classify(client, req.message)
+        intent = cls["intent"]
 
-    # 意图 → 回复 + 下一阶段的映射表
-    INTENT_RESPONSES = {
-        "download_training_excel": (
-            "📥 正在为您打开培训统计表下载…",
-            "download_training_excel",
-        ),
-        "download_ledger_excel": (
-            "📥 正在为您打开案件台账下载…",
-            "download_ledger_excel",
-        ),
-        "waiting_files": (
-            "好的！请上传以下两个文件：\n\n"
-            "- 📄 **培训通知**（PDF 格式）\n"
-            "- ✍️ **签到表**（图片格式：JPG / PNG）",
-            "waiting_files",
-        ),
-        "waiting_ledger_files": (
-            "好的！请上传案件的法律文书文件（支持 **PDF / DOCX / DOC**，可多选）。\n\n"
-            "系统会自动识别文书类型，并判断是否为台账中的已有案件：\n"
-            "- 已有案件：追加审级处理结果或更新执行信息\n"
-            "- 新案件：在台账末尾新增一行",
-            "waiting_ledger_files",
-        ),
-        "waiting_auth_file": (
-            "好的！请上传**呈批件 PDF**，系统将自动提取关键信息并生成授权请示 Word 文档。\n\n"
-            "- 支持文字版 PDF（直接提取）\n"
-            "- 支持扫描版 PDF（自动 OCR 识别）",
-            "waiting_auth_file",
-        ),
-    }
+        # ── 固定回复意图（无需额外 LLM）─────────────────────────────
+        if intent in INTENT_RESPONSES:
+            reply, next_stage = INTENT_RESPONSES[intent]
+            _append_and_save(history, req.message, reply)
+            yield _sse({"type": "done", "reply": reply, "next_stage": next_stage, "kb_conversation_id": ""})
+            return
 
-    # ── 企业信息查询（需动态提取名称 + MCP 调用，不能放 INTENT_RESPONSES 静态表）──
-    if intent == "query_company":
-        name_resp = client.chat.completions.create(
-            model=MODEL_CHAT,
-            messages=[
-                {"role": "system", "content": (
-                    "从用户消息中提取要查询的中国企业名称，只输出企业名称，不要其他文字。"
-                    "示例：用户说【查比亚迪的风险】，只输出【比亚迪】。"
-                )},
-                {"role": "user", "content": req.message},
-            ],
-            max_tokens=30,
-        )
-        raw_name = name_resp.choices[0].message.content.strip()
-        try:
-            from utils.mcp_client import query_company, format_company_markdown
-            result = query_company(raw_name)
-            reply = format_company_markdown(result)
-        except ValueError as e:
-            reply = f"❌ 未找到匹配企业：{e}"
-        except Exception as e:
-            reply = f"❌ 企业信息查询失败：{e}"
-        history.append({"role": "user", "content": req.message})
-        history.append({"role": "assistant", "content": reply})
-        save_history(history)
-        return {"reply": reply, "next_stage": "idle", "kb_conversation_id": ""}
+        # ── 企业查询（MCP，无法流式）────────────────────────────────
+        if intent == "query_company":
+            company = cls.get("company") or req.message
+            try:
+                from utils.mcp_client import query_company, format_company_markdown
+                result = query_company(company)
+                reply = format_company_markdown(result)
+            except ValueError as e:
+                reply = f"❌ 未找到匹配企业：{e}"
+            except Exception as e:
+                reply = f"❌ 企业信息查询失败：{e}"
+            _append_and_save(history, req.message, reply)
+            yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
+            return
 
-    if intent in INTENT_RESPONSES:
-        reply, next_stage = INTENT_RESPONSES[intent]
-        history.append({"role": "user", "content": req.message})
-        history.append({"role": "assistant", "content": reply})
-        save_history(history)
-        return {"reply": reply, "next_stage": next_stage, "kb_conversation_id": ""}
+        # ── 通用对话（流式输出，优化1）──────────────────────────────
+        next_stage = cls.get("next_stage") or "idle"
+        if next_stage not in _ACTIONABLE_STAGES:
+            next_stage = "idle"
 
-    # 通用对话（轻量 ReAct：LLM 在单次调用中回复并决定是否触发工作流）
-    reply, next_stage = _general_chat(client, req.message, history)
-    history.append({"role": "user", "content": req.message})
-    history.append({"role": "assistant", "content": reply})
-    save_history(history)
-    return {"reply": reply, "next_stage": next_stage, "kb_conversation_id": ""}
+        accumulated = ""
+        for chunk in _stream_reply(client, req.message, history):
+            accumulated += chunk
+            yield _sse({"type": "chunk", "text": chunk})
+
+        _append_and_save(history, req.message, accumulated)
+        yield _sse({"type": "done", "reply": "", "next_stage": next_stage, "kb_conversation_id": ""})
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
