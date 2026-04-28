@@ -90,9 +90,9 @@ async def process_auth_request(
 
     write_log(db, user, "auth_request_process", f"生成授权请示：{project_name}", request)
     reply = "✅ 授权请示及授权书已生成！\n\n---\n\n{}".format(auth_content)
-    history = load_history()
+    history = load_history(user.id)
     history.append({"role": "assistant", "content": reply})
-    save_history(history)
+    save_history(history, user.id)
 
     return {
         "content": auth_content,

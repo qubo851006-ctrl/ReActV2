@@ -151,12 +151,13 @@ def write_ledger_confirm(
         f"📊 台账共 **{len(existing_cases)}** 个案件，Excel 已更新。\n\n"
         f"📁 文书已归档至：`{req.archive_dir}`"
     )
-    history = load_history()
+    history = load_history(user.id)
     history.append({"role": "assistant", "content": reply})
-    save_history(history)
+    save_history(history, user.id)
 
     write_log(db, user, "ledger_write", f"写入案件台账：{req.case_data.get('案件名称', '')}", request)
     return {"ok": True, "case_count": len(existing_cases), "reply": reply}
+
 
 
 # ── 清空台账（仅管理员）────────────────────────────────────────
@@ -176,9 +177,9 @@ def clear_ledger(
     else:
         msg = "台账本来就是空的，无需清空。"
     write_log(db, user, "ledger_clear", "清空案件台账", request)
-    history = load_history()
+    history = load_history(user.id)
     history.append({"role": "assistant", "content": msg})
-    save_history(history)
+    save_history(history, user.id)
     return {"message": msg}
 
 

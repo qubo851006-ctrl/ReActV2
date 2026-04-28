@@ -1,12 +1,17 @@
 import json
 from pathlib import Path
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import httpx
 
-from config import MODEL_CHAT, CHAT_HISTORY_PATH, ZHISHU_API_KEY, ZHISHU_BASE_URL
+from config import MODEL_CHAT, DATA_ROOT, ZHISHU_API_KEY, ZHISHU_BASE_URL
 from llm_client import get_llm_client
+from auth_utils import get_current_user
+from models import User
+
+_HISTORY_DIR = Path(DATA_ROOT) / "history"
+_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -53,10 +58,10 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _append_and_save(history: list, user_msg: str, assistant_msg: str):
+def _append_and_save(history: list, user_msg: str, assistant_msg: str, user_id: int):
     history.append({"role": "user", "content": user_msg})
     history.append({"role": "assistant", "content": assistant_msg})
-    save_history(history)
+    save_history(history, user_id)
 
 
 # ── LLM 调用函数 ─────────────────────────────────────────────────
@@ -137,10 +142,14 @@ def _stream_reply(client, message: str, history: list):
             yield delta
 
 
-# ── 历史记录 ─────────────────────────────────────────────────────
+# ── 历史记录（按用户 ID 隔离）──────────────────────────────────
 
-def load_history() -> list:
-    p = Path(CHAT_HISTORY_PATH)
+def _history_path(user_id: int) -> Path:
+    return _HISTORY_DIR / f"user_{user_id}.json"
+
+
+def load_history(user_id: int) -> list:
+    p = _history_path(user_id)
     if not p.exists():
         return []
     try:
@@ -150,9 +159,10 @@ def load_history() -> list:
         return []
 
 
-def save_history(messages: list):
+def save_history(messages: list, user_id: int):
     try:
-        with open(CHAT_HISTORY_PATH, "w", encoding="utf-8") as f:
+        p = _history_path(user_id)
+        with open(p, "w", encoding="utf-8") as f:
             json.dump(messages, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
@@ -161,8 +171,8 @@ def save_history(messages: list):
 # ── HTTP 端点 ────────────────────────────────────────────────────
 
 @router.get("/history")
-def get_history():
-    saved = load_history()
+def get_history(user: User = Depends(get_current_user)):
+    saved = load_history(user.id)
     if not saved:
         saved = [{
             "role": "assistant",
@@ -172,8 +182,8 @@ def get_history():
 
 
 @router.delete("/history")
-def clear_history():
-    save_history([])
+def clear_history(user: User = Depends(get_current_user)):
+    save_history([], user.id)
     return {"ok": True}
 
 
@@ -216,9 +226,10 @@ INTENT_RESPONSES = {
 
 
 @router.post("")
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, user: User = Depends(get_current_user)):
+    uid = user.id
     def generate():
-        history = load_history()
+        history = load_history(uid)
 
         # ── 知识库模式（外部服务，无法流式）────────────────────────
         if req.use_kb:
@@ -243,7 +254,7 @@ def chat(req: ChatRequest):
             except Exception as e:
                 reply = f"❌ 知识库查询失败：{e}"
                 new_conv_id = ""
-            _append_and_save(history, req.message, reply)
+            _append_and_save(history, req.message, reply, uid)
             yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": new_conv_id})
             return
 
@@ -256,7 +267,7 @@ def chat(req: ChatRequest):
         # ── 固定回复意图（无需额外 LLM）─────────────────────────────
         if intent in INTENT_RESPONSES:
             reply, next_stage = INTENT_RESPONSES[intent]
-            _append_and_save(history, req.message, reply)
+            _append_and_save(history, req.message, reply, uid)
             yield _sse({"type": "done", "reply": reply, "next_stage": next_stage, "kb_conversation_id": ""})
             return
 
@@ -271,7 +282,7 @@ def chat(req: ChatRequest):
                 reply = f"❌ 未找到匹配企业：{e}"
             except Exception as e:
                 reply = f"❌ 企业信息查询失败：{e}"
-            _append_and_save(history, req.message, reply)
+            _append_and_save(history, req.message, reply, uid)
             yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
             return
 
@@ -285,7 +296,7 @@ def chat(req: ChatRequest):
             accumulated += chunk
             yield _sse({"type": "chunk", "text": chunk})
 
-        _append_and_save(history, req.message, accumulated)
+        _append_and_save(history, req.message, accumulated, uid)
         yield _sse({"type": "done", "reply": "", "next_stage": next_stage, "kb_conversation_id": ""})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
