@@ -8,6 +8,15 @@ interface VersionEntry {
 
 const VERSIONS: VersionEntry[] = [
   {
+    version: 'v2.2',
+    date: '2026-04-28',
+    changes: [
+      { type: 'feat', text: '前端 SSE 流式输出：普通对话首字秒出、逐字显示，彻底告别等待全文生成后才渲染的体验' },
+      { type: 'refactor', text: '意图分类与通用回复合并为单次 LLM 调用：原需 2 次串行调用，现 1 次分类（max_tokens=80）即可同时识别意图、提取公司名、判断 next_stage' },
+      { type: 'refactor', text: '企业查询公司名提取内嵌到分类步骤：省去原本的第 2 次独立 LLM 调用，查询响应时间进一步缩短' },
+    ],
+  },
+  {
     version: 'v2.1',
     date: '2026-04-28',
     changes: [
