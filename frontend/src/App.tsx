@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import type { ComponentType } from 'react'
-import type { Message, Stage, FlowProps, SkillKey } from './types'
-import { getHistory, clearHistory, sendChat, clearLedger, downloadTrainingExcel, downloadLedgerExcel } from './api'
+import type { Message, Stage, FlowProps, SkillKey, SessionMeta } from './types'
+import {
+  getHistory, clearHistory, sendChat, clearLedger, downloadTrainingExcel, downloadLedgerExcel,
+  getSessions, createSession, deleteSession,
+  setCurrentSessionId as setApiSessionId,
+} from './api'
 import Sidebar from './components/Sidebar'
 import ChatMessage from './components/ChatMessage'
 import TrainingFlow from './components/TrainingFlow'
@@ -68,12 +72,30 @@ export default function App() {
   const [sending, setSending] = useState(false)
   const [versionOpen, setVersionOpen] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
+  const [sessions, setSessions] = useState<SessionMeta[]>([])
+  const [currentSessionId, setCurrentSessionId] = useState<string>('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    getHistory().then(({ messages: msgs }) => {
-      setMessages(msgs)
-    })
+    async function init() {
+      let list = await getSessions()
+      if (list.length === 0) {
+        const { session_id } = await createSession()
+        list = await getSessions()
+        setCurrentSessionId(session_id)
+        setApiSessionId(session_id)
+        setSessions(list)
+        setMessages([])
+      } else {
+        setSessions(list)
+        const first = list[0].id
+        setCurrentSessionId(first)
+        setApiSessionId(first)
+        const { messages: msgs } = await getHistory(first)
+        setMessages(msgs ?? [])
+      }
+    }
+    init()
   }, [])
 
   useEffect(() => {
@@ -160,9 +182,38 @@ export default function App() {
   }
 
   async function handleClearChat() {
-    await clearHistory()
+    await clearHistory(currentSessionId)
     setMessages([])
     setKbConvId('')
+  }
+
+  async function switchSession(sessionId: string) {
+    setCurrentSessionId(sessionId)
+    setApiSessionId(sessionId)
+    setStage('idle')
+    setKbConvId('')
+    const { messages: msgs } = await getHistory(sessionId)
+    setMessages(msgs ?? [])
+  }
+
+  async function handleNewSession() {
+    const { session_id } = await createSession()
+    const list = await getSessions()
+    setSessions(list)
+    await switchSession(session_id)
+  }
+
+  async function handleDeleteSession(sessionId: string) {
+    await deleteSession(sessionId)
+    const list = await getSessions()
+    setSessions(list)
+    if (currentSessionId === sessionId) {
+      if (list.length > 0) {
+        await switchSession(list[0].id)
+      } else {
+        await handleNewSession()
+      }
+    }
   }
 
   function handleToggleKb(v: boolean) {
@@ -183,10 +234,15 @@ export default function App() {
         stage={stage}
         useKb={useKb}
         user={user}
+        sessions={sessions}
+        currentSessionId={currentSessionId}
         onSkill={triggerSkill}
         onClearLedger={handleClearLedger}
         onClearChat={handleClearChat}
         onToggleKb={handleToggleKb}
+        onNewSession={handleNewSession}
+        onSwitchSession={switchSession}
+        onDeleteSession={handleDeleteSession}
       />
 
       {/* Main chat area */}
@@ -194,7 +250,7 @@ export default function App() {
         {/* Header */}
         <div className="flex-shrink-0 px-6 py-4 border-b border-slate-700/50 bg-slate-900/50 backdrop-blur flex items-center justify-between">
           <div>
-            <h1 className="text-base font-semibold text-white m-0">法务合规部智能体V2</h1>
+            <h1 className="text-base font-semibold text-white m-0">法务合规部智能体V2.3</h1>
             <p className="text-xs text-slate-500 mt-0.5">AI 驱动的企业培训与法务管理系统</p>
           </div>
           <div className="flex items-center gap-2">
@@ -214,7 +270,7 @@ export default function App() {
 
         <VersionPanel open={versionOpen} onClose={() => setVersionOpen(false)} />
         {user.role === 'admin' && (
-          <UserAdminPanel open={adminOpen} onClose={() => setAdminOpen(false)} />
+          <UserAdminPanel open={adminOpen} onClose={() => setAdminOpen(false)} currentUser={user} />
         )}
 
         {/* Messages */}

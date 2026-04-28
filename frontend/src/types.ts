@@ -27,6 +27,13 @@ export interface FlowProps {
 /** 侧边栏技能按钮的 key，新增技能在此加一个联合类型成员 */
 export type SkillKey = 'training' | 'ledger' | 'auth' | 'merge' | 'audit'
 
+export interface SessionMeta {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
 export interface TrainingResult {
   topic: string
   location: string

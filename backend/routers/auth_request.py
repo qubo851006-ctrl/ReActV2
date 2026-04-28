@@ -2,7 +2,7 @@ import os
 import io
 import base64
 import tempfile
-from fastapi import APIRouter, Depends, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Request, UploadFile, File, Form
 from sqlalchemy.orm import Session as DBSession
 
 from auth_utils import get_current_user
@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/auth-request", tags=["auth-request"])
 @router.post("/process")
 async def process_auth_request(
     pdf_file: UploadFile = File(...),
+    session_id: str = Form(""),
     request: Request = None,
     db: DBSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -90,9 +91,9 @@ async def process_auth_request(
 
     write_log(db, user, "auth_request_process", f"生成授权请示：{project_name}", request)
     reply = "✅ 授权请示及授权书已生成！\n\n---\n\n{}".format(auth_content)
-    history = load_history(user.id)
+    history = load_history(user.id, session_id)
     history.append({"role": "assistant", "content": reply})
-    save_history(history, user.id)
+    save_history(history, user.id, session_id)
 
     return {
         "content": auth_content,

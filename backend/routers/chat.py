@@ -1,6 +1,8 @@
 import json
+import time as _time
+from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import httpx
@@ -58,10 +60,10 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _append_and_save(history: list, user_msg: str, assistant_msg: str, user_id: int):
+def _append_and_save(history: list, user_msg: str, assistant_msg: str, user_id: int, session_id: str):
     history.append({"role": "user", "content": user_msg})
     history.append({"role": "assistant", "content": assistant_msg})
-    save_history(history, user_id)
+    save_history(history, user_id, session_id)
 
 
 # ── LLM 调用函数 ─────────────────────────────────────────────────
@@ -142,37 +144,139 @@ def _stream_reply(client, message: str, history: list):
             yield delta
 
 
-# ── 历史记录（按用户 ID 隔离）──────────────────────────────────
+# ── Session 存储（每用户独立目录，每 session 一个文件）─────────
 
-def _history_path(user_id: int) -> Path:
-    return _HISTORY_DIR / f"user_{user_id}.json"
+def _user_dir(user_id: int) -> Path:
+    d = _HISTORY_DIR / f"user_{user_id}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
+def _sessions_path(user_id: int) -> Path:
+    return _user_dir(user_id) / "sessions.json"
 
-def load_history(user_id: int) -> list:
-    p = _history_path(user_id)
+def _session_msg_path(user_id: int, session_id: str) -> Path:
+    return _user_dir(user_id) / f"{session_id}.json"
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def _auto_title(messages: list) -> str:
+    for m in messages:
+        if m.get("role") == "user":
+            t = m["content"][:20]
+            return (t + "…") if len(m["content"]) > 20 else t
+    return "新对话"
+
+def load_sessions(user_id: int) -> list:
+    """加载会话元数据列表，首次自动迁移旧版单文件。"""
+    sp = _sessions_path(user_id)
+    old_file = _HISTORY_DIR / f"user_{user_id}.json"
+    # 迁移旧格式：history/user_{id}.json → user_{id}/sess_migrated.json
+    if old_file.exists() and not sp.exists():
+        try:
+            old_msgs = json.loads(old_file.read_text(encoding="utf-8"))
+        except Exception:
+            old_msgs = []
+        if old_msgs:
+            _session_msg_path(user_id, "sess_migrated").write_text(
+                json.dumps(old_msgs, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            now = _now_iso()
+            init_sessions = [{"id": "sess_migrated", "title": _auto_title(old_msgs),
+                               "created_at": now, "updated_at": now}]
+            sp.write_text(json.dumps(init_sessions, ensure_ascii=False, indent=2), encoding="utf-8")
+        old_file.rename(old_file.with_suffix(".bak"))
+    if not sp.exists():
+        return []
+    try:
+        return json.loads(sp.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+def save_sessions(sessions: list, user_id: int):
+    try:
+        _sessions_path(user_id).write_text(
+            json.dumps(sessions, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+def load_history(user_id: int, session_id: str) -> list:
+    p = _session_msg_path(user_id, session_id)
     if not p.exists():
         return []
     try:
-        with open(p, encoding="utf-8") as f:
-            return json.load(f)
+        return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return []
 
-
-def save_history(messages: list, user_id: int):
+def save_history(messages: list, user_id: int, session_id: str):
     try:
-        p = _history_path(user_id)
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(messages, f, ensure_ascii=False, indent=2)
+        _session_msg_path(user_id, session_id).write_text(
+            json.dumps(messages, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        # 同步更新 sessions.json 的 updated_at 和自动标题
+        sessions = load_sessions(user_id)
+        now = _now_iso()
+        for s in sessions:
+            if s["id"] == session_id:
+                s["updated_at"] = now
+                if s["title"] == "新对话":
+                    s["title"] = _auto_title(messages)
+                break
+        sessions.sort(key=lambda s: s["updated_at"], reverse=True)
+        save_sessions(sessions, user_id)
     except Exception:
         pass
+
+def _create_session(user_id: int) -> dict:
+    session_id = f"sess_{int(_time.time() * 1000)}"
+    now = _now_iso()
+    meta = {"id": session_id, "title": "新对话", "created_at": now, "updated_at": now}
+    sessions = load_sessions(user_id)
+    sessions.insert(0, meta)
+    save_sessions(sessions, user_id)
+    return meta
 
 
 # ── HTTP 端点 ────────────────────────────────────────────────────
 
+@router.get("/sessions")
+def list_sessions(user: User = Depends(get_current_user)):
+    sessions = load_sessions(user.id)
+    return {"sessions": sessions}
+
+@router.post("/sessions")
+def create_session_ep(user: User = Depends(get_current_user)):
+    meta = _create_session(user.id)
+    return {"session_id": meta["id"], "title": meta["title"]}
+
+class RenameRequest(BaseModel):
+    title: str
+
+@router.patch("/sessions/{session_id}")
+def rename_session(session_id: str, body: RenameRequest, user: User = Depends(get_current_user)):
+    sessions = load_sessions(user.id)
+    for s in sessions:
+        if s["id"] == session_id:
+            s["title"] = body.title.strip() or "新对话"
+            break
+    save_sessions(sessions, user.id)
+    return {"ok": True}
+
+@router.delete("/sessions/{session_id}")
+def delete_session(session_id: str, user: User = Depends(get_current_user)):
+    sessions = load_sessions(user.id)
+    sessions = [s for s in sessions if s["id"] != session_id]
+    save_sessions(sessions, user.id)
+    msg_file = _session_msg_path(user.id, session_id)
+    if msg_file.exists():
+        msg_file.unlink()
+    return {"ok": True}
+
 @router.get("/history")
-def get_history(user: User = Depends(get_current_user)):
-    saved = load_history(user.id)
+def get_history(session_id: str, user: User = Depends(get_current_user)):
+    saved = load_history(user.id, session_id)
     if not saved:
         saved = [{
             "role": "assistant",
@@ -180,10 +284,15 @@ def get_history(user: User = Depends(get_current_user)):
         }]
     return {"messages": saved}
 
-
 @router.delete("/history")
-def clear_history(user: User = Depends(get_current_user)):
-    save_history([], user.id)
+def clear_history(session_id: str, user: User = Depends(get_current_user)):
+    save_history([], user.id, session_id)
+    sessions = load_sessions(user.id)
+    for s in sessions:
+        if s["id"] == session_id:
+            s["title"] = "新对话"
+            break
+    save_sessions(sessions, user.id)
     return {"ok": True}
 
 
@@ -191,6 +300,7 @@ class ChatRequest(BaseModel):
     message: str
     use_kb: bool = False
     kb_conversation_id: str = ""
+    session_id: str = ""
 
 
 # 固定意图 → 固定回复映射（直接返回，不需要额外 LLM 调用）
@@ -228,8 +338,9 @@ INTENT_RESPONSES = {
 @router.post("")
 def chat(req: ChatRequest, user: User = Depends(get_current_user)):
     uid = user.id
+    sid = req.session_id
     def generate():
-        history = load_history(uid)
+        history = load_history(uid, sid)
 
         # ── 知识库模式（外部服务，无法流式）────────────────────────
         if req.use_kb:
@@ -254,7 +365,7 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
             except Exception as e:
                 reply = f"❌ 知识库查询失败：{e}"
                 new_conv_id = ""
-            _append_and_save(history, req.message, reply, uid)
+            _append_and_save(history, req.message, reply, uid, sid)
             yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": new_conv_id})
             return
 
@@ -267,7 +378,7 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
         # ── 固定回复意图（无需额外 LLM）─────────────────────────────
         if intent in INTENT_RESPONSES:
             reply, next_stage = INTENT_RESPONSES[intent]
-            _append_and_save(history, req.message, reply, uid)
+            _append_and_save(history, req.message, reply, uid, sid)
             yield _sse({"type": "done", "reply": reply, "next_stage": next_stage, "kb_conversation_id": ""})
             return
 
@@ -282,7 +393,7 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
                 reply = f"❌ 未找到匹配企业：{e}"
             except Exception as e:
                 reply = f"❌ 企业信息查询失败：{e}"
-            _append_and_save(history, req.message, reply, uid)
+            _append_and_save(history, req.message, reply, uid, sid)
             yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
             return
 
@@ -296,7 +407,7 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
             accumulated += chunk
             yield _sse({"type": "chunk", "text": chunk})
 
-        _append_and_save(history, req.message, accumulated, uid)
+        _append_and_save(history, req.message, accumulated, uid, sid)
         yield _sse({"type": "done", "reply": "", "next_stage": next_stage, "kb_conversation_id": ""})
 
     return StreamingResponse(generate(), media_type="text/event-stream")

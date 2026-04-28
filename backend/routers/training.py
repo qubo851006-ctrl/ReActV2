@@ -80,6 +80,7 @@ class TrainingWriteRequest(BaseModel):
     count: int
     category: str
     archive_path: str
+    session_id: str = ""
 
 
 @router.post("/write")
@@ -117,9 +118,9 @@ def write_training(
         f"| 归档路径 | `{req.archive_path}` |"
     )
     write_log(db, user, "training_write", f"写入培训记录：{req.topic}", request)
-    history = load_history(user.id)
+    history = load_history(user.id, req.session_id)
     history.append({"role": "assistant", "content": reply})
-    save_history(history, user.id)
+    save_history(history, user.id, req.session_id)
 
     return {"ok": True, "excel_path": EXCEL_PATH}
 
