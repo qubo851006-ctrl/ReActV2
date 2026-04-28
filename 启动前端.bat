@@ -1,5 +1,5 @@
 @echo off
-pushd D:\claude\react\frontend
+pushd D:\claude\reactV2\frontend
 npm run dev
 popd
 pause

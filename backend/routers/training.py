@@ -1,9 +1,14 @@
 import os
 import tempfile
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, Depends, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session as DBSession
 
+from auth_utils import get_current_user
+from audit_log import write_log
+from db import get_db
+from models import User
 from routers.chat import load_history, save_history
 
 router = APIRouter(prefix="/api/training", tags=["training"])
@@ -78,7 +83,12 @@ class TrainingWriteRequest(BaseModel):
 
 
 @router.post("/write")
-def write_training(req: TrainingWriteRequest):
+def write_training(
+    req: TrainingWriteRequest,
+    request: Request,
+    db: DBSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """
     用户确认后写入 Excel 台账并更新对话历史。
     """
@@ -106,6 +116,7 @@ def write_training(req: TrainingWriteRequest):
         f"| 培训类别 | {req.category} |\n"
         f"| 归档路径 | `{req.archive_path}` |"
     )
+    write_log(db, user, "training_write", f"写入培训记录：{req.topic}", request)
     history = load_history()
     history.append({"role": "assistant", "content": reply})
     save_history(history)

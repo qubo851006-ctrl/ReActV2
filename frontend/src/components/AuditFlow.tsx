@@ -144,7 +144,7 @@ function PieSection({
             cy="50%"
             outerRadius={90}
             dataKey="value"
-            label={({ name, percent }: { name: string; percent: number }) =>
+            label={({ name, percent }: any) =>
               `${name} ${(percent * 100).toFixed(0)}%`
             }
             labelLine={true}
@@ -154,7 +154,7 @@ function PieSection({
             ))}
           </Pie>
           <Tooltip
-            formatter={(value: number) => [`${value}项`, '数量']}
+            formatter={(value) => [`${value}项`, '数量']}
             contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }}
           />
           <Legend wrapperStyle={{ color: '#94a3b8', fontSize: 12 }} />

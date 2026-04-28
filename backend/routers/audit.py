@@ -6,11 +6,16 @@ import tempfile
 from pathlib import Path
 
 import openpyxl
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel
+from sqlalchemy.orm import Session as DBSession
 
+from auth_utils import get_current_user
+from audit_log import write_log
+from db import get_db
+from models import User
 from config import MODEL_CHAT
 from llm_client import get_llm_client
 
@@ -177,6 +182,9 @@ def _parse_llm_output(text: str, rows: list[dict]) -> list[dict]:
 async def analyze_audit(
     file: UploadFile = File(...),
     domains: str = Form('["物业租赁","酒店公寓","工程领域","资产处置","历史遗留问题"]'),
+    request: Request = None,
+    db: DBSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     try:
         doms = json.loads(domains)
@@ -210,6 +218,7 @@ async def analyze_audit(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM 调用失败：{e}")
 
+    write_log(db, user, "audit_analyze", f"审计分析，共 {len(classified_rows)} 条问题", request)
     return {"rows": classified_rows, "total": len(classified_rows)}
 
 

@@ -5,9 +5,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator, Any
 
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, Depends, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session as DBSession
+
+from auth_utils import get_current_user, require_admin
+from audit_log import write_log
+from db import get_db
+from models import User
 
 from config import LEDGER_JSON_PATH, LEDGER_EXCEL_PATH, LEDGER_OUTPUT_DIR
 from ledger_helpers import (
@@ -111,7 +117,12 @@ class LedgerWriteRequest(BaseModel):
 
 
 @router.post("/write")
-def write_ledger_confirm(req: LedgerWriteRequest):
+def write_ledger_confirm(
+    req: LedgerWriteRequest,
+    request: Request,
+    db: DBSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """
     用户确认后将案件数据写入 cases.json 和 Excel。
     """
@@ -144,13 +155,18 @@ def write_ledger_confirm(req: LedgerWriteRequest):
     history.append({"role": "assistant", "content": reply})
     save_history(history)
 
+    write_log(db, user, "ledger_write", f"写入案件台账：{req.case_data.get('案件名称', '')}", request)
     return {"ok": True, "case_count": len(existing_cases), "reply": reply}
 
 
-# ── 清空台账 ──────────────────────────────────────────────────
+# ── 清空台账（仅管理员）────────────────────────────────────────
 
 @router.post("/clear")
-def clear_ledger():
+def clear_ledger(
+    request: Request,
+    db: DBSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
     p = Path(LEDGER_JSON_PATH)
     if p.exists():
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -159,6 +175,7 @@ def clear_ledger():
         msg = f"✅ 台账已清空，备份已保存至：`{backup}`"
     else:
         msg = "台账本来就是空的，无需清空。"
+    write_log(db, user, "ledger_clear", "清空案件台账", request)
     history = load_history()
     history.append({"role": "assistant", "content": msg})
     save_history(history)

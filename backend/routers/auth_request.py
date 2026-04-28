@@ -2,8 +2,13 @@ import os
 import io
 import base64
 import tempfile
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, Depends, Request, UploadFile, File
+from sqlalchemy.orm import Session as DBSession
 
+from auth_utils import get_current_user
+from audit_log import write_log
+from db import get_db
+from models import User
 from routers.chat import load_history, save_history
 from config import AUTH_LEDGER_PATH
 
@@ -11,7 +16,12 @@ router = APIRouter(prefix="/api/auth-request", tags=["auth-request"])
 
 
 @router.post("/process")
-async def process_auth_request(pdf_file: UploadFile = File(...)):
+async def process_auth_request(
+    pdf_file: UploadFile = File(...),
+    request: Request = None,
+    db: DBSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
     from utils.auth_request_drafter import (
@@ -78,6 +88,7 @@ async def process_auth_request(pdf_file: UploadFile = File(...)):
             ledger_b64 = base64.b64encode(f.read()).decode()
         ledger_filename = os.path.basename(AUTH_LEDGER_PATH)
 
+    write_log(db, user, "auth_request_process", f"生成授权请示：{project_name}", request)
     reply = "✅ 授权请示及授权书已生成！\n\n---\n\n{}".format(auth_content)
     history = load_history()
     history.append({"role": "assistant", "content": reply})

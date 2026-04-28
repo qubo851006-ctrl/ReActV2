@@ -1,8 +1,10 @@
 import type { Stage, SkillKey } from '../types'
+import type { AuthUser } from './AuthGate'
 
 interface Props {
   stage: Stage
   useKb: boolean
+  user: AuthUser
   onSkill: (skill: SkillKey) => void
   onClearLedger: () => void
   onClearChat: () => void
@@ -17,7 +19,7 @@ const skills = [
   { key: 'audit' as const,   icon: '🔍', label: '审计问题分析',   desc: '上传审计汇总表，AI分类并生成报告' },
 ]
 
-export default function Sidebar({ stage, useKb, onSkill, onClearLedger, onClearChat, onToggleKb }: Props) {
+export default function Sidebar({ stage, useKb, user, onSkill, onClearLedger, onClearChat, onToggleKb }: Props) {
   const busy = stage !== 'idle'
   return (
     <aside className="w-60 flex-shrink-0 flex flex-col bg-slate-900 border-r border-slate-700/50 h-screen">
@@ -62,13 +64,15 @@ export default function Sidebar({ stage, useKb, onSkill, onClearLedger, onClearC
         <div className="border-t border-slate-700/50 my-3" />
 
         <div className="text-xs font-medium text-slate-500 uppercase tracking-wider px-2 mb-2">管理操作</div>
-        <button
-          onClick={onClearLedger}
-          disabled={busy}
-          className="w-full text-left px-3 py-2.5 rounded-lg mb-1 text-sm text-slate-400 hover:text-slate-200 hover:bg-slate-700/40 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
-        >
-          <span>🗂️</span> 清空台账
-        </button>
+        {user.role === 'admin' && (
+          <button
+            onClick={onClearLedger}
+            disabled={busy}
+            className="w-full text-left px-3 py-2.5 rounded-lg mb-1 text-sm text-slate-400 hover:text-slate-200 hover:bg-slate-700/40 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            <span>🗂️</span> 清空台账
+          </button>
+        )}
         <button
           onClick={onClearChat}
           disabled={busy}

@@ -2,9 +2,14 @@
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session as DBSession
 
+from auth_utils import get_current_user
+from audit_log import write_log
+from db import get_db
+from models import User
 from utils.excel_merger import merge_ledgers
 
 router = APIRouter(prefix="/api/ledger-merge")
@@ -18,6 +23,9 @@ async def merge_excel(
     contract_file: UploadFile = File(...),
     purchase_file: Optional[UploadFile] = File(None),
     finance_file: Optional[UploadFile] = File(None),
+    request: Request = None,
+    db: DBSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     try:
         contract_bytes = await contract_file.read()
@@ -29,6 +37,7 @@ async def merge_excel(
         DATA_DIR.mkdir(exist_ok=True)
         MERGED_FILE.write_bytes(excel_bytes)
 
+        write_log(db, user, "ledger_merge", f"合并三台账，合同条数：{stats.get('total_contract', 0)}", request)
         return {"ok": True, **stats}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

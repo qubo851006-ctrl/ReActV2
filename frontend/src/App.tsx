@@ -10,6 +10,10 @@ import AuthFlow from './components/AuthFlow'
 import LedgerMergeFlow from './components/LedgerMergeFlow'
 import AuditFlow from './components/AuditFlow'
 import VersionPanel from './components/VersionPanel'
+import AuthGate from './components/AuthGate'
+import type { AuthUser } from './components/AuthGate'
+import UserMenu from './components/UserMenu'
+import UserAdminPanel from './components/UserAdminPanel'
 
 // 新增 Flow 组件：在此表加一行，不改 App 主逻辑
 const FLOW_COMPONENTS: Partial<Record<Stage, ComponentType<FlowProps>>> = {
@@ -63,6 +67,7 @@ export default function App() {
   const [kbConvId, setKbConvId] = useState('')
   const [sending, setSending] = useState(false)
   const [versionOpen, setVersionOpen] = useState(false)
+  const [adminOpen, setAdminOpen] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -171,10 +176,13 @@ export default function App() {
   const activeDownload = DOWNLOAD_ACTIONS[stage]
 
   return (
+    <AuthGate>
+      {(user: AuthUser, onLogout: () => void) => (
     <div className="flex h-screen w-full overflow-hidden bg-slate-950">
       <Sidebar
         stage={stage}
         useKb={useKb}
+        user={user}
         onSkill={triggerSkill}
         onClearLedger={handleClearLedger}
         onClearChat={handleClearChat}
@@ -189,19 +197,25 @@ export default function App() {
             <h1 className="text-base font-semibold text-white m-0">法务合规部智能体V2</h1>
             <p className="text-xs text-slate-500 mt-0.5">AI 驱动的企业培训与法务管理系统</p>
           </div>
-          <button
-            onClick={() => setVersionOpen(true)}
-            title="功能说明 &amp; 版本记录"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-700/50 transition-colors"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            功能说明
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setVersionOpen(true)}
+              title="功能说明 &amp; 版本记录"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-700/50 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              功能说明
+            </button>
+            <UserMenu user={user} onLogout={onLogout} onOpenAdmin={() => setAdminOpen(true)} />
+          </div>
         </div>
 
         <VersionPanel open={versionOpen} onClose={() => setVersionOpen(false)} />
+        {user.role === 'admin' && (
+          <UserAdminPanel open={adminOpen} onClose={() => setAdminOpen(false)} />
+        )}
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -244,7 +258,7 @@ export default function App() {
           <div ref={bottomRef} />
         </div>
 
-        {/* Input bar */}
+        {/* 输入栏 */}
         <div className="flex-shrink-0 px-6 py-4 border-t border-slate-700/50 bg-slate-900/30">
           <div className="flex gap-3 items-center">
             <input
@@ -284,5 +298,7 @@ export default function App() {
         </div>
       </div>
     </div>
+      )}
+    </AuthGate>
   )
 }

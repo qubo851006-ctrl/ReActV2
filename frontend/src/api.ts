@@ -2,13 +2,23 @@ import type { TrainingResult, LedgerPreview, LedgerCaseData } from './types'
 
 const BASE = '/api'
 
+/** 统一 fetch 封装：自动带 Cookie，401/403 派发全局登出事件 */
+async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const r = await fetch(url, { ...init, credentials: 'include' })
+  if (r.status === 401 || r.status === 403) {
+    window.dispatchEvent(new Event('auth:unauthorized'))
+    throw new Error('unauthorized')
+  }
+  return r
+}
+
 export async function getHistory() {
-  const r = await fetch(`${BASE}/chat/history`)
+  const r = await apiFetch(`${BASE}/chat/history`)
   return r.json()
 }
 
 export async function clearHistory() {
-  await fetch(`${BASE}/chat/history`, { method: 'DELETE' })
+  await apiFetch(`${BASE}/chat/history`, { method: 'DELETE' })
 }
 
 export async function sendChat(
@@ -17,7 +27,7 @@ export async function sendChat(
   kbConvId: string,
   onChunk: (text: string) => void,
 ): Promise<{ reply: string; next_stage: string; kb_conversation_id: string }> {
-  const resp = await fetch(`${BASE}/chat`, {
+  const resp = await apiFetch(`${BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, use_kb: useKb, kb_conversation_id: kbConvId }),
@@ -62,13 +72,13 @@ export async function extractTraining(
   form.append('notice_pdf', noticePdf)
   form.append('signin_img', signinImg)
   form.append('department', department)
-  const r = await fetch(`${BASE}/training/extract`, { method: 'POST', body: form })
+  const r = await apiFetch(`${BASE}/training/extract`, { method: 'POST', body: form })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
 
 export async function writeTraining(data: Omit<TrainingResult, 'excel_path' | 'confidence' | 'reflection_note'>) {
-  const r = await fetch(`${BASE}/training/write`, {
+  const r = await apiFetch(`${BASE}/training/write`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -90,7 +100,7 @@ export async function extractLedger(
   const form = new FormData()
   for (const f of files) form.append('files', f)
 
-  const resp = await fetch(`${BASE}/ledger/extract`, { method: 'POST', body: form })
+  const resp = await apiFetch(`${BASE}/ledger/extract`, { method: 'POST', body: form })
   if (!resp.ok) throw new Error(await resp.text())
 
   const reader = resp.body!.getReader()
@@ -121,7 +131,7 @@ export async function writeLedger(
   matchIdx: number | null,
   archiveDir: string,
 ): Promise<{ ok: boolean; case_count: number; reply: string }> {
-  const r = await fetch(`${BASE}/ledger/write`, {
+  const r = await apiFetch(`${BASE}/ledger/write`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ case_data: caseData, match_idx: matchIdx, archive_dir: archiveDir }),
@@ -131,7 +141,7 @@ export async function writeLedger(
 }
 
 export async function clearLedger() {
-  const r = await fetch(`${BASE}/ledger/clear`, { method: 'POST' })
+  const r = await apiFetch(`${BASE}/ledger/clear`, { method: 'POST' })
   return r.json()
 }
 
@@ -159,7 +169,7 @@ export async function mergeLedgers(
   form.append('contract_file', contractFile)
   if (purchaseFile) form.append('purchase_file', purchaseFile)
   if (financeFile) form.append('finance_file', financeFile)
-  const r = await fetch(`${BASE}/ledger-merge/merge`, { method: 'POST', body: form })
+  const r = await apiFetch(`${BASE}/ledger-merge/merge`, { method: 'POST', body: form })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
@@ -191,13 +201,13 @@ export async function analyzeAudit(
   const form = new FormData()
   form.append('file', file)
   form.append('domains', JSON.stringify(domains))
-  const r = await fetch(`${BASE}/audit/analyze`, { method: 'POST', body: form })
+  const r = await apiFetch(`${BASE}/audit/analyze`, { method: 'POST', body: form })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
 
 export async function downloadAuditExcel(rows: AuditRow[], originalFilename: string) {
-  const r = await fetch(`${BASE}/audit/download`, {
+  const r = await apiFetch(`${BASE}/audit/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ rows, original_filename: originalFilename }),
@@ -217,7 +227,7 @@ export async function downloadAuditExcel(rows: AuditRow[], originalFilename: str
 export async function processAuthRequest(pdfFile: File) {
   const form = new FormData()
   form.append('pdf_file', pdfFile)
-  const r = await fetch(`${BASE}/auth-request/process`, { method: 'POST', body: form })
+  const r = await apiFetch(`${BASE}/auth-request/process`, { method: 'POST', body: form })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
