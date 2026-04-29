@@ -8,7 +8,7 @@ import {
   Tooltip,
 } from 'recharts'
 import type { AuditRow } from '../api'
-import { analyzeAudit, downloadAuditExcel } from '../api'
+import { analyzeAudit, downloadAuditExcel, getErrorMessage } from '../api'
 
 interface Props {
   onComplete: (reply: string) => void
@@ -39,6 +39,11 @@ const L1_CATEGORIES = Object.keys(CATEGORY_TAXONOMY)
 
 const DEFAULT_DOMAINS = ['物业租赁', '酒店公寓', '工程领域', '资产处置', '历史遗留问题']
 const COLORS = ['#6366f1', '#22d3ee', '#f59e0b', '#10b981', '#f43f5e', '#a78bfa']
+
+interface PieLabelProps {
+  name?: string
+  percent?: number
+}
 
 // ── 可编辑标签组 ────────────────────────────────────────────────
 
@@ -144,8 +149,8 @@ function PieSection({
             cy="50%"
             outerRadius={90}
             dataKey="value"
-            label={({ name, percent }: any) =>
-              `${name} ${(percent * 100).toFixed(0)}%`
+            label={({ name, percent }: PieLabelProps) =>
+              `${name ?? ''} ${((percent ?? 0) * 100).toFixed(0)}%`
             }
             labelLine={true}
           >
@@ -206,8 +211,8 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
       const result = await analyzeAudit(file, domains)
       setRows(result.rows)
       setPhase('review')
-    } catch (e: any) {
-      setError(e.message || '分析失败，请重试')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '分析失败，请重试'))
       setPhase('upload')
     }
   }
@@ -229,8 +234,8 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
     try {
       const baseName = file?.name.replace(/\.(xlsx|xls)$/i, '') || '审计问题分析结果'
       await downloadAuditExcel(rows, baseName)
-    } catch (e: any) {
-      setError(e.message || '下载失败')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '下载失败'))
     } finally {
       setDownloading(false)
     }

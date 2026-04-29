@@ -8,6 +8,7 @@ backend/__pycache__/
 backend/**/__pycache__/
 backend/*.pyc
 backend/.env
+backend/tests/tmp/
 
 # User data (uploads, generated files)
 data/

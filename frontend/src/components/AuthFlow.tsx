@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { processAuthRequest, downloadDocx } from '../api'
+import { processAuthRequest, downloadDocx, getErrorMessage } from '../api'
 
 function downloadXlsx(base64: string, filename: string) {
   const bytes = atob(base64)
@@ -50,8 +50,8 @@ export default function AuthFlow({ onComplete, onCancel }: Props) {
     try {
       const res = await processAuthRequest(pdfFile)
       setResult(res as AuthResult)
-    } catch (e: any) {
-      setError(e.message || '处理失败')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '处理失败'))
     } finally {
       setProcessing(false)
     }

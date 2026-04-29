@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { extractLedger, writeLedger, downloadLedgerExcel } from '../api'
+import { extractLedger, writeLedger, downloadLedgerExcel, getErrorMessage } from '../api'
 import type { LedgerPreview, LedgerCaseData, LedgerStage } from '../types'
 
 interface Props {
@@ -44,8 +44,8 @@ export default function LedgerFlow({ onComplete, onCancel }: Props) {
       setPreview(res)
       setEditedCase({ ...res.case_data, stages: res.case_data.stages.map(s => ({ ...s })) })
       setStep('confirm')
-    } catch (e: any) {
-      setError(e.message || '处理失败')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '处理失败'))
       setStep('upload')
     }
   }
@@ -58,14 +58,14 @@ export default function LedgerFlow({ onComplete, onCancel }: Props) {
       setDoneResult({ case_count: res.case_count, archive_dir: preview.archive_dir })
       setStep('done')
       onComplete(res.reply)
-    } catch (e: any) {
-      setError(e.message || '写入失败')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '写入失败'))
     } finally {
       setWriting(false)
     }
   }
 
-  function setField(key: keyof LedgerCaseData, value: any) {
+  function setField<K extends keyof LedgerCaseData>(key: K, value: LedgerCaseData[K]) {
     setEditedCase(prev => prev ? { ...prev, [key]: value } : prev)
   }
 

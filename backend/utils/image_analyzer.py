@@ -4,6 +4,7 @@ import warnings
 import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
+from config import AI_HTTP_VERIFY_SSL
 
 warnings.filterwarnings("ignore")  # 屏蔽内网 SSL 警告
 load_dotenv(override=True)
@@ -24,7 +25,7 @@ def get_client() -> OpenAI:
     return OpenAI(
         api_key=os.getenv("AIRCHINA_API_KEY"),
         base_url=os.getenv("AIRCHINA_BASE_URL"),
-        http_client=httpx.Client(verify=False),
+        http_client=httpx.Client(verify=AI_HTTP_VERIFY_SSL),
     )
 
 

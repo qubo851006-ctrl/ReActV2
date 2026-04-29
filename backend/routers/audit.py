@@ -18,6 +18,7 @@ from db import get_db
 from models import User
 from config import MODEL_CHAT
 from llm_client import get_llm_client
+from upload_validation import UploadValidationError, validate_excel_upload
 
 router = APIRouter(prefix="/api/audit")
 
@@ -193,8 +194,11 @@ async def analyze_audit(
 
     try:
         content = await file.read()
+        validate_excel_upload(file.filename or "", file.content_type, content)
         wb = openpyxl.load_workbook(io.BytesIO(content))
         rows = _extract_rows(wb)
+    except UploadValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

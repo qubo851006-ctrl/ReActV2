@@ -2,6 +2,10 @@ import type { TrainingResult, LedgerPreview, LedgerCaseData, SessionMeta } from 
 
 const BASE = '/api'
 
+export function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
+
 /** 当前 session ID，由 App.tsx 在切换/新建时更新 */
 let _sid = ''
 export function setCurrentSessionId(id: string) { _sid = id }
@@ -136,7 +140,7 @@ export async function extractLedger(
   const reader = resp.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  let previewData: any = null
+  let previewData: LedgerPreview | null = null
 
   while (true) {
     const { done, value } = await reader.read()
@@ -147,12 +151,16 @@ export async function extractLedger(
     for (const line of lines) {
       if (!line.startsWith('data: ')) continue
       try {
-        const data = JSON.parse(line.slice(6))
-        if (data.log) onLog(data.log)
-        if (data.preview) previewData = data
+        const data = JSON.parse(line.slice(6)) as Partial<LedgerPreview> & {
+          log?: string
+          preview?: boolean
+        }
+        if (typeof data.log === 'string') onLog(data.log)
+        if (data.preview && data.case_data) previewData = data as LedgerPreview
       } catch { /* ignore */ }
     }
   }
+  if (!previewData) throw new Error('未收到案件预览数据')
   return previewData
 }
 

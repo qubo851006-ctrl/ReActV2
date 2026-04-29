@@ -14,6 +14,8 @@ from typing import Callable
 
 from llm_client import get_llm_client
 from config import MODEL_CHAT, MODEL_VISION, LEDGER_JSON_PATH, LEDGER_OUTPUT_DIR, LEGAL_ARCHIVE_ROOT
+from file_store import atomic_write_bytes, atomic_write_text, file_lock
+from upload_validation import safe_upload_name
 
 
 # ── 提取文书文字 ──────────────────────────────────────────────
@@ -241,14 +243,16 @@ def load_cases_json() -> list:
     p = Path(LEDGER_JSON_PATH)
     if not p.exists():
         return []
-    with open(p, encoding="utf-8") as f:
-        return json.load(f)
+    with file_lock(p):
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
 
 
 def save_cases_json(cases: list):
     Path(LEDGER_JSON_PATH).parent.mkdir(parents=True, exist_ok=True)
-    with open(LEDGER_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(cases, f, ensure_ascii=False, indent=2)
+    payload = json.dumps(cases, ensure_ascii=False, indent=2)
+    with file_lock(LEDGER_JSON_PATH):
+        atomic_write_text(LEDGER_JSON_PATH, payload, encoding="utf-8")
 
 
 def find_matching_case_idx(new_case: dict, existing_cases: list, docs: list = None):
@@ -318,6 +322,34 @@ def merge_case_data(existing: dict, new_data: dict) -> dict:
 
 _LEGAL_ALLOWED_EXTS = {".pdf", ".docx", ".doc"}
 _WINDOWS_RESERVED = re.compile(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$', re.IGNORECASE)
+_LEGAL_UPLOAD_MAX_BYTES = int(os.getenv("LEGAL_UPLOAD_MAX_BYTES", str(50 * 1024 * 1024)))
+_LEGAL_ALLOWED_CONTENT_TYPES = {
+    ".pdf": {"application/pdf", "application/octet-stream", ""},
+    ".docx": {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/zip",
+        "application/octet-stream",
+        "",
+    },
+    ".doc": {"application/msword", "application/octet-stream", ""},
+}
+
+
+def _safe_basename(filename: str) -> str:
+    name = Path(str(filename or "").replace("\\", "/")).name.strip()
+    if not name or name in {".", ".."}:
+        raise ValueError("Invalid upload filename")
+    return name
+
+
+def _sanitize_upload_name(filename: str) -> str:
+    return safe_upload_name(filename, _LEGAL_ALLOWED_EXTS)
+
+
+def validate_legal_upload(filename: str, content_type: str | None, data: bytes) -> str:
+    from upload_validation import validate_legal_upload as _validate_legal_upload
+
+    return _validate_legal_upload(filename, content_type, data)
 
 def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
     safe_name = re.sub(r'[\\/:*?"<>|]', "_", case_name).strip() or "未知案件"
@@ -341,7 +373,7 @@ def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
             safe_doc_type = f"_{safe_doc_type}"
 
         # 防御 1：提取纯文件名，去掉任何路径前缀
-        pure_name = Path(name).name
+        pure_name = _sanitize_upload_name(name)
 
         # 防御 2：扩展名白名单（点文件特殊处理）
         if pure_name.startswith(".") and "." not in pure_name[1:]:
@@ -376,7 +408,7 @@ def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
             dest_path = (target_dir / f"{safe_doc_type}_{safe_stem}_{i}{ext}").resolve()
 
         try:
-            dest_path.write_bytes(data)
+            atomic_write_bytes(dest_path, bytes(data))
         except OSError as e:
             logging.warning("archive_legal_docs: 写入失败 %s: %s", dest_path, e)
             continue

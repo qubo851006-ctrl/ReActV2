@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { mergeLedgers, downloadMergedExcel, type MergeStats } from '../api'
+import { mergeLedgers, downloadMergedExcel, getErrorMessage, type MergeStats } from '../api'
 
 interface Props {
   onComplete: (reply: string) => void
@@ -92,11 +92,11 @@ export default function LedgerMergeFlow({ onComplete, onCancel }: Props) {
     try {
       const result = await mergeLedgers(contractFile, purchaseFile, financeFile)
       setStats(result)
-    } catch (e: any) {
-      let msg = e.message || '合并失败'
+    } catch (e: unknown) {
+      let msg = getErrorMessage(e, '合并失败')
       try {
-        const json = JSON.parse(msg)
-        msg = json.detail || msg
+        const json = JSON.parse(msg) as { detail?: unknown }
+        msg = typeof json.detail === 'string' ? json.detail : msg
       } catch { /* keep original */ }
       setError(msg)
     } finally {

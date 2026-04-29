@@ -11,6 +11,16 @@ AIRCHINA_BASE_URL = os.getenv("AIRCHINA_BASE_URL",  "")
 ZHISHU_API_KEY    = os.getenv("ZHISHU_API_KEY",     "")
 ZHISHU_BASE_URL   = os.getenv("ZHISHU_BASE_URL",    "")
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+AI_HTTP_VERIFY_SSL = _env_bool("AI_HTTP_VERIFY_SSL", True)
+
 # Data directories — all user-generated content stored under the project's data/ folder
 _BACKEND_DIR       = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT      = os.path.dirname(_BACKEND_DIR)

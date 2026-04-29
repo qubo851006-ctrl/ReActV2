@@ -1,6 +1,6 @@
 import os
 import tempfile
-from fastapi import APIRouter, Depends, Request, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
@@ -10,6 +10,7 @@ from audit_log import write_log
 from db import get_db
 from models import User
 from routers.chat import load_history, save_history
+from upload_validation import UploadValidationError, validate_image_upload, validate_pdf_upload
 
 router = APIRouter(prefix="/api/training", tags=["training"])
 
@@ -36,10 +37,15 @@ async def extract_training(
 
     notice_bytes = await notice_pdf.read()
     signin_bytes = await signin_img.read()
+    try:
+        notice_name = validate_pdf_upload(notice_pdf.filename or "", notice_pdf.content_type, notice_bytes)
+        signin_name = validate_image_upload(signin_img.filename or "", signin_img.content_type, signin_bytes)
+    except UploadValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        notice_path = os.path.join(tmpdir, notice_pdf.filename)
-        signin_path = os.path.join(tmpdir, signin_img.filename)
+        notice_path = os.path.join(tmpdir, notice_name)
+        signin_path = os.path.join(tmpdir, signin_name)
         with open(notice_path, "wb") as f:
             f.write(notice_bytes)
         with open(signin_path, "wb") as f:

@@ -1,5 +1,6 @@
 import json
 import httpx
+from config import AI_HTTP_VERIFY_SSL
 
 MCP_ENDPOINT = "https://mcpmarket.cn/mcp/60c5fa4bd605ddc1ba37fb5c"
 _BASE_HEADERS = {
@@ -107,7 +108,7 @@ def query_company(company_name: str, categories: list[str] = None) -> dict:
     headers = dict(_BASE_HEADERS)
 
     try:
-        with httpx.Client(timeout=30, verify=False) as client:
+        with httpx.Client(timeout=30, verify=AI_HTTP_VERIFY_SSL) as client:
             # 1. Initialize session
             init_resp = client.post(MCP_ENDPOINT, headers=headers, json={
                 "jsonrpc": "2.0",

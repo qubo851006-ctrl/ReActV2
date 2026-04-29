@@ -8,7 +8,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import httpx
 
-from config import MODEL_CHAT, DATA_ROOT, ZHISHU_API_KEY, ZHISHU_BASE_URL
+from config import MODEL_CHAT, DATA_ROOT, ZHISHU_API_KEY, ZHISHU_BASE_URL, AI_HTTP_VERIFY_SSL
+from file_store import atomic_write_text, file_lock, safe_child_path
 from llm_client import get_llm_client
 from auth_utils import get_current_user
 from models import User
@@ -162,8 +163,9 @@ def _session_msg_path(user_id: int, session_id: str) -> Path:
     if not _SESSION_ID_RE.match(session_id):
         raise HTTPException(status_code=400, detail="无效的 session_id 格式")
     base = _user_dir(user_id).resolve()
-    p = base / f"{session_id}.json"
-    if not p.resolve().is_relative_to(base):
+    try:
+        p = safe_child_path(base, f"{session_id}.json")
+    except ValueError:
         raise HTTPException(status_code=400, detail="无效的 session_id")
     return p
 
@@ -188,13 +190,14 @@ def load_sessions(user_id: int) -> list:
         except Exception:
             old_msgs = []
         if old_msgs:
-            _session_msg_path(user_id, "sess_migrated").write_text(
-                json.dumps(old_msgs, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            migrated_path = _session_msg_path(user_id, "sess_migrated")
+            with file_lock(migrated_path):
+                atomic_write_text(migrated_path, json.dumps(old_msgs, ensure_ascii=False, indent=2), encoding="utf-8")
             now = _now_iso()
             init_sessions = [{"id": "sess_migrated", "title": _auto_title(old_msgs),
                                "created_at": now, "updated_at": now}]
-            sp.write_text(json.dumps(init_sessions, ensure_ascii=False, indent=2), encoding="utf-8")
+            with file_lock(sp):
+                atomic_write_text(sp, json.dumps(init_sessions, ensure_ascii=False, indent=2), encoding="utf-8")
         old_file.rename(old_file.with_suffix(".bak"))
     if not sp.exists():
         return []
@@ -205,9 +208,11 @@ def load_sessions(user_id: int) -> list:
 
 def save_sessions(sessions: list, user_id: int):
     try:
-        _sessions_path(user_id).write_text(
-            json.dumps(sessions, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        path = _sessions_path(user_id)
+        with file_lock(path):
+            atomic_write_text(path, json.dumps(sessions, ensure_ascii=False, indent=2), encoding="utf-8")
+    except HTTPException:
+        raise
     except Exception:
         pass
 
@@ -218,7 +223,8 @@ def load_history(user_id: int, session_id: str) -> list:
     if not p.exists():
         return []
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        with file_lock(p):
+            return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return []
 
@@ -226,9 +232,9 @@ def save_history(messages: list, user_id: int, session_id: str):
     if not session_id:
         return
     try:
-        _session_msg_path(user_id, session_id).write_text(
-            json.dumps(messages, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        path = _session_msg_path(user_id, session_id)
+        with file_lock(path):
+            atomic_write_text(path, json.dumps(messages, ensure_ascii=False, indent=2), encoding="utf-8")
         # 同步更新 sessions.json 的 updated_at 和自动标题
         sessions = load_sessions(user_id)
         now = _now_iso()
@@ -240,6 +246,8 @@ def save_history(messages: list, user_id: int, session_id: str):
                 break
         sessions.sort(key=lambda s: s["updated_at"], reverse=True)
         save_sessions(sessions, user_id)
+    except HTTPException:
+        raise
     except Exception:
         pass
 
@@ -270,6 +278,7 @@ class RenameRequest(BaseModel):
 
 @router.patch("/sessions/{session_id}")
 def rename_session(session_id: str, body: RenameRequest, user: User = Depends(get_current_user)):
+    _session_msg_path(user.id, session_id)
     sessions = load_sessions(user.id)
     for s in sessions:
         if s["id"] == session_id:
@@ -280,12 +289,13 @@ def rename_session(session_id: str, body: RenameRequest, user: User = Depends(ge
 
 @router.delete("/sessions/{session_id}")
 def delete_session(session_id: str, user: User = Depends(get_current_user)):
+    msg_file = _session_msg_path(user.id, session_id)
     sessions = load_sessions(user.id)
     sessions = [s for s in sessions if s["id"] != session_id]
     save_sessions(sessions, user.id)
-    msg_file = _session_msg_path(user.id, session_id)
     if msg_file.exists():
-        msg_file.unlink()
+        with file_lock(msg_file):
+            msg_file.unlink()
     return {"ok": True}
 
 @router.get("/history")
@@ -371,7 +381,7 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
                     "user": "training-manager",
                     "conversation_id": req.kb_conversation_id,
                 }
-                resp = httpx.post(url, json=payload, headers=headers, verify=False, timeout=120)
+                resp = httpx.post(url, json=payload, headers=headers, verify=AI_HTTP_VERIFY_SSL, timeout=120)
                 resp.raise_for_status()
                 data = resp.json()
                 reply = data.get("answer", "（知识库未返回内容）")

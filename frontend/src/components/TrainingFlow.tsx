@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { extractTraining, writeTraining, downloadTrainingExcel } from '../api'
+import { extractTraining, writeTraining, downloadTrainingExcel, getErrorMessage } from '../api'
 import type { TrainingResult } from '../types'
 
 interface Props {
@@ -31,8 +31,8 @@ export default function TrainingFlow({ onComplete, onCancel }: Props) {
       setExtracted(res)
       setEdited({ ...res })
       setStep('confirm')
-    } catch (e: any) {
-      setError(e.message || '处理失败')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '处理失败'))
       setStep('upload')
     }
   }
@@ -52,8 +52,8 @@ export default function TrainingFlow({ onComplete, onCancel }: Props) {
       })
       setStep('done')
       onComplete(`✅ 培训记录已写入台账！主题：${edited.topic}，参与人数：${edited.count} 人`)
-    } catch (e: any) {
-      setError(e.message || '写入失败')
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '写入失败'))
     } finally {
       setWriting(false)
     }

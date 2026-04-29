@@ -11,6 +11,8 @@ from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from config import AI_HTTP_VERIFY_SSL
+from file_store import atomic_save_workbook, file_lock
 
 warnings.filterwarnings("ignore")
 load_dotenv(override=True)
@@ -22,7 +24,7 @@ def _get_client():
     return OpenAI(
         api_key=os.getenv("AIRCHINA_API_KEY"),
         base_url=os.getenv("AIRCHINA_BASE_URL"),
-        http_client=httpx.Client(verify=False),
+        http_client=httpx.Client(verify=AI_HTTP_VERIFY_SSL),
     )
 
 
@@ -261,15 +263,9 @@ _AUTH_LEDGER_HEADERS = [
 ]
 
 
-def init_auth_ledger(ledger_path):
-    """若台账文件不存在则自动创建（含表头）。"""
-    import os
+def _create_auth_ledger_workbook():
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
-
-    os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
-    if os.path.exists(ledger_path):
-        return
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -285,8 +281,16 @@ def init_auth_ledger(ledger_path):
     for col, width in enumerate(col_widths, start=1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = width
     ws.row_dimensions[1].height = 22
+    return wb
 
-    wb.save(ledger_path)
+
+def init_auth_ledger(ledger_path):
+    """若台账文件不存在则自动创建（含表头）。"""
+    os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
+    with file_lock(ledger_path):
+        if os.path.exists(ledger_path):
+            return
+        atomic_save_workbook(_create_auth_ledger_workbook(), ledger_path)
 
 
 def record_to_ledger(info, title, ledger_path):
@@ -294,50 +298,54 @@ def record_to_ledger(info, title, ledger_path):
     try:
         import openpyxl
         from openpyxl.styles import Alignment as XlAlign
-        init_auth_ledger(ledger_path)
-        wb = openpyxl.load_workbook(ledger_path)
-        ws = wb.active
+        os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
+        with file_lock(ledger_path):
+            if os.path.exists(ledger_path):
+                wb = openpyxl.load_workbook(ledger_path)
+            else:
+                wb = _create_auth_ledger_workbook()
+            ws = wb.active
 
-        # 当前最大序号
-        max_seq = 0
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[0] is not None:
-                try:
-                    max_seq = max(max_seq, int(row[0]))
-                except (TypeError, ValueError):
-                    pass
+            # 当前最大序号
+            max_seq = 0
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if row[0] is not None:
+                    try:
+                        max_seq = max(max_seq, int(row[0]))
+                    except (TypeError, ValueError):
+                        pass
 
-        # 授权内容概要
-        items = info.get("授权事项") or []
-        summary = "；".join(items)[:200] if items else ""
+            # 授权内容概要
+            items = info.get("授权事项") or []
+            summary = "；".join(items)[:200] if items else ""
 
-        new_row = [
-            max_seq + 1,           # 序号
-            None,                   # 编号（人工填写）
-            info.get("拟稿人"),     # 经办人
-            info.get("授权单位"),   # 授权人
-            info.get("被授权上级单位") or info.get("被授权单位"),  # 代理人
-            info.get("印章要求"),   # 印章
-            info.get("授权份数"),   # 份数
-            info.get("文件日期"),   # 授权起始日期
-            info.get("授权期限"),   # 授权终止日期
-            summary,                # 授权内容概要
-            info.get("文件日期"),   # 办理时间
-            None,                   # 代理人签字版是否发送回来
-            info.get("文件编号"),   # 文号
-            None,                   # 责任者
-            title,                  # 题目
-            None,                   # 归档日期
-            None,                   # 页数
-        ]
-        next_row = ws.max_row + 1
-        for col, value in enumerate(new_row, start=1):
-            cell = ws.cell(row=next_row, column=col, value=value)
-            cell.alignment = XlAlign(vertical="center")
-            if next_row % 2 == 0:
-                from openpyxl.styles import PatternFill
-                cell.fill = PatternFill(fill_type="solid", fgColor="DCE6F1")
-        wb.save(ledger_path)
+            new_row = [
+                max_seq + 1,           # 序号
+                None,                   # 编号（人工填写）
+                info.get("拟稿人"),     # 经办人
+                info.get("授权单位"),   # 授权人
+                info.get("被授权上级单位") or info.get("被授权单位"),  # 代理人
+                info.get("印章要求"),   # 印章
+                info.get("授权份数"),   # 份数
+                info.get("文件日期"),   # 授权起始日期
+                info.get("授权期限"),   # 授权终止日期
+                summary,                # 授权内容概要
+                info.get("文件日期"),   # 办理时间
+                None,                   # 代理人签字版是否发送回来
+                info.get("文件编号"),   # 文号
+                None,                   # 责任者
+                title,                  # 题目
+                None,                   # 归档日期
+                None,                   # 页数
+            ]
+            next_row = ws.max_row + 1
+            for col, value in enumerate(new_row, start=1):
+                cell = ws.cell(row=next_row, column=col, value=value)
+                cell.alignment = XlAlign(vertical="center")
+                if next_row % 2 == 0:
+                    from openpyxl.styles import PatternFill
+                    cell.fill = PatternFill(fill_type="solid", fgColor="DCE6F1")
+            atomic_save_workbook(wb, ledger_path)
         return True
     except Exception:
         return False

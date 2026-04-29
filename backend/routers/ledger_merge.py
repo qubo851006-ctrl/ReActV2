@@ -10,6 +10,8 @@ from auth_utils import get_current_user
 from audit_log import write_log
 from db import get_db
 from models import User
+from file_store import atomic_write_bytes, file_lock
+from upload_validation import validate_excel_upload
 from utils.excel_merger import merge_ledgers
 
 router = APIRouter(prefix="/api/ledger-merge")
@@ -32,10 +34,17 @@ async def merge_excel(
         purchase_bytes = await purchase_file.read() if purchase_file and purchase_file.filename else None
         finance_bytes = await finance_file.read() if finance_file and finance_file.filename else None
 
+        validate_excel_upload(contract_file.filename or "", contract_file.content_type, contract_bytes)
+        if purchase_bytes is not None and purchase_file:
+            validate_excel_upload(purchase_file.filename or "", purchase_file.content_type, purchase_bytes)
+        if finance_bytes is not None and finance_file:
+            validate_excel_upload(finance_file.filename or "", finance_file.content_type, finance_bytes)
+
         excel_bytes, stats = merge_ledgers(contract_bytes, purchase_bytes, finance_bytes)
 
         DATA_DIR.mkdir(exist_ok=True)
-        MERGED_FILE.write_bytes(excel_bytes)
+        with file_lock(MERGED_FILE):
+            atomic_write_bytes(MERGED_FILE, excel_bytes)
 
         write_log(db, user, "ledger_merge", f"合并三台账，合同条数：{stats.get('total_contract', 0)}", request)
         return {"ok": True, **stats}

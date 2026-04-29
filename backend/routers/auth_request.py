@@ -2,7 +2,7 @@ import os
 import io
 import base64
 import tempfile
-from fastapi import APIRouter, Depends, Request, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from sqlalchemy.orm import Session as DBSession
 
 from auth_utils import get_current_user
@@ -11,6 +11,7 @@ from db import get_db
 from models import User
 from routers.chat import load_history, save_history
 from config import AUTH_LEDGER_PATH
+from upload_validation import UploadValidationError, validate_pdf_upload
 
 router = APIRouter(prefix="/api/auth-request", tags=["auth-request"])
 
@@ -37,6 +38,10 @@ async def process_auth_request(
     import pdfplumber
 
     pdf_bytes = await pdf_file.read()
+    try:
+        validate_pdf_upload(pdf_file.filename or "", pdf_file.content_type, pdf_bytes)
+    except UploadValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # 提取文字
     pdf_text = ""

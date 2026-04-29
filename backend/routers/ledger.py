@@ -1,11 +1,12 @@
 import os
 import json
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator, Any
 
-from fastapi import APIRouter, Depends, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
@@ -14,12 +15,14 @@ from auth_utils import get_current_user, require_admin
 from audit_log import write_log
 from db import get_db
 from models import User
+from file_store import atomic_write_bytes, file_lock
 
 from config import LEDGER_JSON_PATH, LEDGER_EXCEL_PATH, LEDGER_OUTPUT_DIR
 from ledger_helpers import (
     extract_file_text, ocr_pdf_with_vision, detect_doc_type_by_content,
     extract_case_fields, load_cases_json, save_cases_json,
     find_matching_case_idx, merge_case_data, archive_legal_docs,
+    validate_legal_upload,
 )
 from routers.chat import load_history, save_history
 
@@ -37,7 +40,11 @@ async def extract_ledger(files: list[UploadFile] = File(...)):
     files_data = []
     for f in files:
         b = await f.read()
-        files_data.append({"name": f.filename, "bytes": b})
+        try:
+            safe_name = validate_legal_upload(f.filename or "", f.content_type, b)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        files_data.append({"name": safe_name, "bytes": b, "content_type": f.content_type})
 
     async def event_stream() -> AsyncGenerator[str, None]:
         def send(msg: str) -> str:
@@ -127,29 +134,56 @@ def write_ledger_confirm(
     """
     用户确认后将案件数据写入 cases.json 和 Excel。
     """
-    existing_cases = load_cases_json()
+    output_dir = Path(LEDGER_OUTPUT_DIR)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    if req.match_idx is not None and 0 <= req.match_idx < len(existing_cases):
-        existing_cases[req.match_idx] = req.case_data
-        action_text = f"已更新案件「{req.case_data.get('案件名称', '')}」"
-        is_new = False
-    else:
-        existing_cases.append(req.case_data)
-        action_text = f"已新增案件「{req.case_data.get('案件名称', '')}」"
-        is_new = True
+    txn_lock = Path(LEDGER_JSON_PATH).with_suffix(".txn")
+    with file_lock(txn_lock):
+        existing_cases = load_cases_json()
+        updated_cases = list(existing_cases)
 
-    save_cases_json(existing_cases)
-    Path(LEDGER_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+        if req.match_idx is not None and 0 <= req.match_idx < len(updated_cases):
+            updated_cases[req.match_idx] = req.case_data
+            action_text = f"已更新案件「{req.case_data.get('案件名称', '')}」"
+            is_new = False
+        else:
+            updated_cases.append(req.case_data)
+            action_text = f"已新增案件「{req.case_data.get('案件名称', '')}」"
+            is_new = True
 
-    try:
-        from utils.write_excel import write_ledger as write_legal_ledger
-        write_legal_ledger(existing_cases, LEDGER_EXCEL_PATH)
-    except Exception as e:
-        pass  # Excel 写入失败不阻断流程
+        json_path = Path(LEDGER_JSON_PATH)
+        excel_path = Path(LEDGER_EXCEL_PATH)
+        old_json = json_path.read_bytes() if json_path.exists() else None
+        old_excel = excel_path.read_bytes() if excel_path.exists() else None
+
+        tmp_excel = None
+        try:
+            from utils.write_excel import write_ledger as write_legal_ledger
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", dir=str(output_dir), delete=False) as tmp:
+                tmp_excel = tmp.name
+            write_legal_ledger(updated_cases, tmp_excel)
+            save_cases_json(updated_cases)
+            Path(tmp_excel).replace(excel_path)
+        except Exception as e:
+            if tmp_excel and os.path.exists(tmp_excel):
+                try:
+                    os.unlink(tmp_excel)
+                except OSError:
+                    pass
+            if old_json is not None:
+                atomic_write_bytes(json_path, old_json)
+            elif json_path.exists():
+                json_path.unlink()
+            if old_excel is not None:
+                atomic_write_bytes(excel_path, old_excel)
+            elif excel_path.exists():
+                excel_path.unlink()
+            write_log(db, user, "ledger_write_failed", f"Ledger transaction failed: {e}", request)
+            raise HTTPException(status_code=500, detail=f"台账写入失败：{e}")
 
     reply = (
         f"✅ {action_text}\n\n"
-        f"📊 台账共 **{len(existing_cases)}** 个案件，Excel 已更新。\n\n"
+        f"📊 台账共 **{len(updated_cases)}** 个案件，Excel 已更新。\n\n"
         f"📁 文书已归档至：`{req.archive_dir}`"
     )
     history = load_history(user.id, req.session_id)
@@ -157,7 +191,7 @@ def write_ledger_confirm(
     save_history(history, user.id, req.session_id)
 
     write_log(db, user, "ledger_write", f"写入案件台账：{req.case_data.get('案件名称', '')}", request)
-    return {"ok": True, "case_count": len(existing_cases), "reply": reply}
+    return {"ok": True, "case_count": len(updated_cases), "reply": reply}
 
 
 
@@ -170,14 +204,16 @@ def clear_ledger(
     db: DBSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
-    p = Path(LEDGER_JSON_PATH)
-    if p.exists():
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup = p.with_name(f"cases_backup_{ts}.json")
-        p.rename(backup)
-        msg = f"✅ 台账已清空，备份已保存至：`{backup}`"
-    else:
-        msg = "台账本来就是空的，无需清空。"
+    txn_lock = Path(LEDGER_JSON_PATH).with_suffix(".txn")
+    with file_lock(txn_lock):
+        p = Path(LEDGER_JSON_PATH)
+        if p.exists():
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = p.with_name(f"cases_backup_{ts}.json")
+            p.replace(backup)
+            msg = f"✅ 台账已清空，备份已保存至：`{backup}`"
+        else:
+            msg = "台账本来就是空的，无需清空。"
     write_log(db, user, "ledger_clear", "清空案件台账", request)
     history = load_history(user.id, session_id)
     history.append({"role": "assistant", "content": msg})
