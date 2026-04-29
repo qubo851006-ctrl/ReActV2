@@ -317,6 +317,7 @@ def merge_case_data(existing: dict, new_data: dict) -> dict:
 
 
 _LEGAL_ALLOWED_EXTS = {".pdf", ".docx", ".doc"}
+_WINDOWS_RESERVED = re.compile(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$', re.IGNORECASE)
 
 def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
     safe_name = re.sub(r'[\\/:*?"<>|]', "_", case_name).strip() or "未知案件"
@@ -328,10 +329,13 @@ def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
     for fd, doc in zip(files_data, docs):
         name = fd.get("name", "")
         data = fd.get("bytes")
-        if not name or not data:
+        if not name or not isinstance(data, (bytes, bytearray)):
             continue
 
         doc_type = doc.get("doc_type", "其他")
+        safe_doc_type = re.sub(r'[\\/:*?"<>|]', "_", doc_type).strip() or "其他"
+        if _WINDOWS_RESERVED.match(safe_doc_type):
+            safe_doc_type = f"_{safe_doc_type}"
 
         # 防御 1：提取纯文件名，去掉任何路径前缀
         pure_name = Path(name).name
@@ -351,7 +355,7 @@ def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
         safe_stem = safe_stem[:200]
         safe_filename = safe_stem + ext
 
-        dest_name = f"{doc_type}_{safe_filename}"
+        dest_name = f"{safe_doc_type}_{safe_filename}"
         dest_path = (target_dir / dest_name).resolve()
 
         # 越界兜底：确认路径仍在归档根目录内
@@ -361,9 +365,12 @@ def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
 
         if dest_path.exists():
             i = 2
-            while (target_dir / f"{doc_type}_{safe_stem}_{i}{ext}").exists():
+            while i <= 9999 and (target_dir / f"{safe_doc_type}_{safe_stem}_{i}{ext}").exists():
                 i += 1
-            dest_path = (target_dir / f"{doc_type}_{safe_stem}_{i}{ext}").resolve()
+            if i > 9999:
+                logging.warning("archive_legal_docs: 重名文件数超限，跳过 %s", safe_filename)
+                continue
+            dest_path = (target_dir / f"{safe_doc_type}_{safe_stem}_{i}{ext}").resolve()
 
         try:
             dest_path.write_bytes(data)
