@@ -315,21 +315,41 @@ def merge_case_data(existing: dict, new_data: dict) -> dict:
     return result
 
 
+_LEGAL_ALLOWED_EXTS = {".pdf", ".docx", ".doc"}
+
 def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
     safe_name = re.sub(r'[\\/:*?"<>|]', "_", case_name).strip() or "未知案件"
-    target_dir = os.path.join(LEGAL_ARCHIVE_ROOT, safe_name)
-    os.makedirs(target_dir, exist_ok=True)
+    target_dir = Path(LEGAL_ARCHIVE_ROOT) / safe_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+    base = target_dir.resolve()
+
     for fd, doc in zip(files_data, docs):
         doc_type = doc.get("doc_type", "其他")
-        ext = os.path.splitext(fd["name"])[1]
-        dest_name = f"{doc_type}_{fd['name']}"
-        dest_path = os.path.join(target_dir, dest_name)
-        if os.path.exists(dest_path):
-            base = f"{doc_type}_{os.path.splitext(fd['name'])[0]}"
+
+        # 防御 1：提取纯文件名，去掉任何路径前缀
+        pure_name = Path(fd["name"]).name
+        # 防御 2：扩展名白名单
+        ext = Path(pure_name).suffix.lower()
+        if ext not in _LEGAL_ALLOWED_EXTS:
+            ext = ".bin"
+            pure_name = Path(pure_name).stem + ext
+        # 防御 3：清理文件名中的非法字符
+        safe_filename = re.sub(r'[\\/:*?"<>|]', "_", pure_name).strip() or "文件"
+
+        dest_name = f"{doc_type}_{safe_filename}"
+        dest_path = (target_dir / dest_name).resolve()
+
+        # 越界兜底：确认路径仍在归档根目录内
+        if not dest_path.is_relative_to(base):
+            continue
+
+        if dest_path.exists():
+            stem = f"{doc_type}_{Path(safe_filename).stem}"
             i = 2
-            while os.path.exists(os.path.join(target_dir, f"{base}_{i}{ext}")):
+            while (target_dir / f"{stem}_{i}{ext}").exists():
                 i += 1
-            dest_path = os.path.join(target_dir, f"{base}_{i}{ext}")
-        with open(dest_path, "wb") as f:
-            f.write(fd["bytes"])
-    return target_dir
+            dest_path = (target_dir / f"{stem}_{i}{ext}").resolve()
+
+        dest_path.write_bytes(fd["bytes"])
+
+    return str(target_dir)
