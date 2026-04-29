@@ -320,6 +320,7 @@ _LEGAL_ALLOWED_EXTS = {".pdf", ".docx", ".doc"}
 
 def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
     safe_name = re.sub(r'[\\/:*?"<>|]', "_", case_name).strip() or "未知案件"
+    safe_name = safe_name[:100]
     target_dir = Path(LEGAL_ARCHIVE_ROOT) / safe_name
     target_dir.mkdir(parents=True, exist_ok=True)
     base = target_dir.resolve()
@@ -337,12 +338,13 @@ def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
 
         # 防御 2：扩展名白名单（点文件特殊处理）
         if pure_name.startswith(".") and "." not in pure_name[1:]:
-            ext = ""  # 点文件无真实扩展名
+            ext = ".bin"          # 点文件无真实扩展名，直接归为 bin
+            stem_only = pure_name  # 保留整个点文件名作为 stem（如 ".pdf"）
         else:
             ext = Path(pure_name).suffix.lower()
-        if ext not in _LEGAL_ALLOWED_EXTS:
-            ext = ".bin"
-        stem_only = Path(pure_name).stem if ext else pure_name
+            stem_only = Path(pure_name).stem
+            if ext not in _LEGAL_ALLOWED_EXTS:
+                ext = ".bin"
 
         # 防御 3：清理文件名中的非法字符 + 长度限制
         safe_stem = re.sub(r'[\\/:*?"<>|]', "_", stem_only).strip() or "文件"
