@@ -1,4 +1,5 @@
 import json
+import re
 import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,9 @@ from models import User
 
 _HISTORY_DIR = Path(DATA_ROOT) / "history"
 _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+
+# session_id 只允许 sess_ 开头 + 字母数字下划线，防止路径穿越
+_SESSION_ID_RE = re.compile(r'^sess_[A-Za-z0-9_-]+$')
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -155,7 +159,13 @@ def _sessions_path(user_id: int) -> Path:
     return _user_dir(user_id) / "sessions.json"
 
 def _session_msg_path(user_id: int, session_id: str) -> Path:
-    return _user_dir(user_id) / f"{session_id}.json"
+    if not _SESSION_ID_RE.match(session_id):
+        raise HTTPException(status_code=400, detail="无效的 session_id 格式")
+    base = _user_dir(user_id).resolve()
+    p = base / f"{session_id}.json"
+    if not p.resolve().is_relative_to(base):
+        raise HTTPException(status_code=400, detail="无效的 session_id")
+    return p
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -202,6 +212,8 @@ def save_sessions(sessions: list, user_id: int):
         pass
 
 def load_history(user_id: int, session_id: str) -> list:
+    if not session_id:
+        return []
     p = _session_msg_path(user_id, session_id)
     if not p.exists():
         return []
@@ -211,6 +223,8 @@ def load_history(user_id: int, session_id: str) -> list:
         return []
 
 def save_history(messages: list, user_id: int, session_id: str):
+    if not session_id:
+        return
     try:
         _session_msg_path(user_id, session_id).write_text(
             json.dumps(messages, ensure_ascii=False, indent=2), encoding="utf-8"
