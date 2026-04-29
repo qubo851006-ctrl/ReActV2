@@ -322,9 +322,12 @@ _WINDOWS_RESERVED = re.compile(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$', re.IGNO
 def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
     safe_name = re.sub(r'[\\/:*?"<>|]', "_", case_name).strip() or "未知案件"
     safe_name = safe_name[:100]
-    target_dir = Path(LEGAL_ARCHIVE_ROOT) / safe_name
+    archive_root = Path(LEGAL_ARCHIVE_ROOT).resolve()
+    target_dir = (archive_root / safe_name).resolve()
+    if not target_dir.is_relative_to(archive_root):
+        raise ValueError(f"archive_legal_docs: case_name 越出归档根目录: {case_name!r}")
     target_dir.mkdir(parents=True, exist_ok=True)
-    base = target_dir.resolve()
+    base = target_dir  # 已经是 resolved 路径
 
     for fd, doc in zip(files_data, docs):
         name = fd.get("name", "")
