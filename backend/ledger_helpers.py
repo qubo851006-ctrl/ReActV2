@@ -6,6 +6,7 @@ import re
 import os
 import json
 import base64
+import logging
 import shutil
 import tempfile
 from pathlib import Path
@@ -324,32 +325,48 @@ def archive_legal_docs(files_data: list, docs: list, case_name: str) -> str:
     base = target_dir.resolve()
 
     for fd, doc in zip(files_data, docs):
+        name = fd.get("name", "")
+        data = fd.get("bytes")
+        if not name or not data:
+            continue
+
         doc_type = doc.get("doc_type", "其他")
 
         # 防御 1：提取纯文件名，去掉任何路径前缀
-        pure_name = Path(fd["name"]).name
-        # 防御 2：扩展名白名单
-        ext = Path(pure_name).suffix.lower()
+        pure_name = Path(name).name
+
+        # 防御 2：扩展名白名单（点文件特殊处理）
+        if pure_name.startswith(".") and "." not in pure_name[1:]:
+            ext = ""  # 点文件无真实扩展名
+        else:
+            ext = Path(pure_name).suffix.lower()
         if ext not in _LEGAL_ALLOWED_EXTS:
             ext = ".bin"
-            pure_name = Path(pure_name).stem + ext
-        # 防御 3：清理文件名中的非法字符
-        safe_filename = re.sub(r'[\\/:*?"<>|]', "_", pure_name).strip() or "文件"
+        stem_only = Path(pure_name).stem if ext else pure_name
+
+        # 防御 3：清理文件名中的非法字符 + 长度限制
+        safe_stem = re.sub(r'[\\/:*?"<>|]', "_", stem_only).strip() or "文件"
+        safe_stem = safe_stem[:200]
+        safe_filename = safe_stem + ext
 
         dest_name = f"{doc_type}_{safe_filename}"
         dest_path = (target_dir / dest_name).resolve()
 
         # 越界兜底：确认路径仍在归档根目录内
         if not dest_path.is_relative_to(base):
+            logging.warning("archive_legal_docs: 路径越界已跳过 %s", dest_path)
             continue
 
         if dest_path.exists():
-            stem = f"{doc_type}_{Path(safe_filename).stem}"
             i = 2
-            while (target_dir / f"{stem}_{i}{ext}").exists():
+            while (target_dir / f"{doc_type}_{safe_stem}_{i}{ext}").exists():
                 i += 1
-            dest_path = (target_dir / f"{stem}_{i}{ext}").resolve()
+            dest_path = (target_dir / f"{doc_type}_{safe_stem}_{i}{ext}").resolve()
 
-        dest_path.write_bytes(fd["bytes"])
+        try:
+            dest_path.write_bytes(data)
+        except OSError as e:
+            logging.warning("archive_legal_docs: 写入失败 %s: %s", dest_path, e)
+            continue
 
     return str(target_dir)
