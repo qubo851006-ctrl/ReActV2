@@ -1,5 +1,6 @@
 import type { Stage, SkillKey, SessionMeta } from '../types'
 import type { AuthUser } from './AuthGate'
+import { APP_TITLE } from '../appMeta'
 
 interface Props {
   stage: Stage
@@ -101,7 +102,7 @@ export default function Sidebar({
         <div className="flex items-center gap-2">
           <span className="text-2xl">📋</span>
           <div>
-            <div className="text-sm font-semibold text-white leading-tight">法务合规部智能体V2.3</div>
+            <div className="text-sm font-semibold text-white leading-tight">{APP_TITLE}</div>
             <div className="text-xs text-slate-400 mt-0.5">AI 驱动的智能管理工具</div>
           </div>
         </div>

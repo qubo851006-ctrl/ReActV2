@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AuthUser } from './AuthGate'
+import { APP_TITLE } from '../appMeta'
 
 interface SlimUser {
   id: number
@@ -61,7 +62,7 @@ export default function IdentityLogin({ onLogin }: Props) {
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="text-4xl mb-3">📋</div>
-          <h1 className="text-xl font-semibold text-white">法务合规部智能体 V2</h1>
+          <h1 className="text-xl font-semibold text-white">{APP_TITLE}</h1>
           <p className="text-sm text-slate-500 mt-1">部门内部工具 · 请确认当前使用人</p>
         </div>
 

@@ -18,6 +18,7 @@ import AuthGate from './components/AuthGate'
 import type { AuthUser } from './components/AuthGate'
 import UserMenu from './components/UserMenu'
 import UserAdminPanel from './components/UserAdminPanel'
+import { APP_TITLE } from './appMeta'
 
 // 新增 Flow 组件：在此表加一行，不改 App 主逻辑
 const FLOW_COMPONENTS: Partial<Record<Stage, ComponentType<FlowProps>>> = {
@@ -250,8 +251,7 @@ export default function App() {
         {/* Header */}
         <div className="flex-shrink-0 px-6 py-4 border-b border-slate-700/50 bg-slate-900/50 backdrop-blur flex items-center justify-between">
           <div>
-            <h1 className="text-base font-semibold text-white m-0">法务合规部智能体V2.3</h1>
-            <p className="text-xs text-slate-500 mt-0.5">AI 驱动的企业培训与法务管理系统</p>
+            <h1 className="text-base font-semibold text-white m-0">{APP_TITLE}</h1>
           </div>
           <div className="flex items-center gap-2">
             <button
