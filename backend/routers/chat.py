@@ -10,7 +10,7 @@ import httpx
 
 from config import MODEL_CHAT, DATA_ROOT, ZHISHU_API_KEY, ZHISHU_BASE_URL, AI_HTTP_VERIFY_SSL
 from file_store import atomic_write_text, file_lock, safe_child_path
-from llm_client import get_llm_client
+from llm_client import format_llm_error, get_llm_client
 from auth_utils import get_current_user
 from models import User
 
@@ -396,7 +396,13 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
         client = get_llm_client()
 
         # ── 单次分类调用（优化2+3）───────────────────────────────────
-        cls = _classify(client, req.message)
+        try:
+            cls = _classify(client, req.message)
+        except Exception as e:
+            reply = format_llm_error(e)
+            _append_and_save(history, req.message, reply, uid, sid)
+            yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
+            return
         intent = cls["intent"]
 
         # ── 固定回复意图（无需额外 LLM）─────────────────────────────
@@ -427,9 +433,21 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
             next_stage = "idle"
 
         accumulated = ""
-        for chunk in _stream_reply(client, req.message, history):
-            accumulated += chunk
-            yield _sse({"type": "chunk", "text": chunk})
+        try:
+            for chunk in _stream_reply(client, req.message, history):
+                accumulated += chunk
+                yield _sse({"type": "chunk", "text": chunk})
+        except Exception as e:
+            reply = format_llm_error(e)
+            if accumulated:
+                accumulated = f"{accumulated}\n\n{reply}"
+                yield _sse({"type": "chunk", "text": f"\n\n{reply}"})
+                reply = ""
+            else:
+                accumulated = reply
+            _append_and_save(history, req.message, accumulated, uid, sid)
+            yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
+            return
 
         _append_and_save(history, req.message, accumulated, uid, sid)
         yield _sse({"type": "done", "reply": "", "next_stage": next_stage, "kb_conversation_id": ""})

@@ -9,6 +9,7 @@ TEST_TMP_ROOT = BACKEND_DIR / "tests" / "tmp"
 sys.path.insert(0, str(BACKEND_DIR))
 
 from file_store import atomic_write_bytes, atomic_write_text, safe_child_path
+from llm_client import format_llm_error
 from upload_validation import (
     UploadValidationError,
     validate_excel_upload,
@@ -69,6 +70,20 @@ class FileStoreTests(unittest.TestCase):
             self.assertEqual(safe_child_path(base, "sess_abc.json").parent, base.resolve())
             with self.assertRaises(ValueError):
                 safe_child_path(base, "..", "escape.json")
+
+
+class LlmClientTests(unittest.TestCase):
+    def test_certificate_verify_failure_gets_actionable_message(self):
+        message = format_llm_error(
+            Exception(
+                "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+                "IP address mismatch, certificate is not valid for '10.150.224.182'"
+            )
+        )
+
+        self.assertIn("AI 服务连接失败", message)
+        self.assertIn("证书校验失败", message)
+        self.assertIn("AI_HTTP_VERIFY_SSL=false", message)
 
 
 if __name__ == "__main__":

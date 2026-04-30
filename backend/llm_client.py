@@ -3,6 +3,17 @@ from openai import OpenAI
 from config import AIRCHINA_API_KEY, AIRCHINA_BASE_URL, AI_HTTP_VERIFY_SSL
 
 
+def format_llm_error(error: Exception) -> str:
+    text = str(error)
+    if "CERTIFICATE_VERIFY_FAILED" in text or "certificate verify failed" in text:
+        return (
+            "❌ AI 服务连接失败：证书校验失败。当前 AI 服务地址的 TLS 证书与访问地址不匹配。"
+            "如果这是内网可信服务，请优先改用证书匹配的域名或更新服务端证书；"
+            "临时处理可以在后端 .env 设置 AI_HTTP_VERIFY_SSL=false 后重启服务。"
+        )
+    return f"❌ AI 服务连接失败：{text}"
+
+
 def get_llm_client() -> OpenAI:
     return OpenAI(
         api_key=AIRCHINA_API_KEY,
