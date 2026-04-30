@@ -13,6 +13,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from config import AI_HTTP_VERIFY_SSL
 from file_store import atomic_save_workbook, file_lock
+from llm_client import build_ai_http_headers
 
 warnings.filterwarnings("ignore")
 load_dotenv(override=True)
@@ -24,7 +25,7 @@ def _get_client():
     return OpenAI(
         api_key=os.getenv("AIRCHINA_API_KEY"),
         base_url=os.getenv("AIRCHINA_BASE_URL"),
-        http_client=httpx.Client(verify=AI_HTTP_VERIFY_SSL),
+        http_client=httpx.Client(verify=AI_HTTP_VERIFY_SSL, headers=build_ai_http_headers()),
     )
 
 

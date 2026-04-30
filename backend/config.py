@@ -8,6 +8,7 @@ MODEL_VISION = os.getenv("MODEL_VISION", "qwen2.5-vl-72b")
 
 AIRCHINA_API_KEY  = os.getenv("AIRCHINA_API_KEY",  "")
 AIRCHINA_BASE_URL = os.getenv("AIRCHINA_BASE_URL",  "")
+AI_HTTP_HOST_HEADER = os.getenv("AI_HTTP_HOST_HEADER", "")
 ZHISHU_API_KEY    = os.getenv("ZHISHU_API_KEY",     "")
 ZHISHU_BASE_URL   = os.getenv("ZHISHU_BASE_URL",    "")
 

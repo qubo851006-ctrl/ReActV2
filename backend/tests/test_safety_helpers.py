@@ -9,7 +9,7 @@ TEST_TMP_ROOT = BACKEND_DIR / "tests" / "tmp"
 sys.path.insert(0, str(BACKEND_DIR))
 
 from file_store import atomic_write_bytes, atomic_write_text, safe_child_path
-from llm_client import format_llm_error
+from llm_client import build_ai_http_headers, format_llm_error
 from upload_validation import (
     UploadValidationError,
     validate_excel_upload,
@@ -73,6 +73,10 @@ class FileStoreTests(unittest.TestCase):
 
 
 class LlmClientTests(unittest.TestCase):
+    def test_host_header_is_optional(self):
+        self.assertEqual(build_ai_http_headers("aiplus.airchina.com.cn:18080"), {"Host": "aiplus.airchina.com.cn:18080"})
+        self.assertEqual(build_ai_http_headers(""), {})
+
     def test_certificate_verify_failure_gets_actionable_message(self):
         message = format_llm_error(
             Exception(

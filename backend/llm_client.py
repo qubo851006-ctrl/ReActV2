@@ -1,6 +1,10 @@
 import httpx
 from openai import OpenAI
-from config import AIRCHINA_API_KEY, AIRCHINA_BASE_URL, AI_HTTP_VERIFY_SSL
+from config import AIRCHINA_API_KEY, AIRCHINA_BASE_URL, AI_HTTP_HOST_HEADER, AI_HTTP_VERIFY_SSL
+
+
+def build_ai_http_headers(host_header: str = AI_HTTP_HOST_HEADER) -> dict[str, str]:
+    return {"Host": host_header} if host_header else {}
 
 
 def format_llm_error(error: Exception) -> str:
@@ -18,5 +22,8 @@ def get_llm_client() -> OpenAI:
     return OpenAI(
         api_key=AIRCHINA_API_KEY,
         base_url=AIRCHINA_BASE_URL,
-        http_client=httpx.Client(verify=AI_HTTP_VERIFY_SSL),
+        http_client=httpx.Client(
+            verify=AI_HTTP_VERIFY_SSL,
+            headers=build_ai_http_headers(),
+        ),
     )
