@@ -4,6 +4,7 @@ import type { Message, Stage, FlowProps, SkillKey, SessionMeta } from './types'
 import {
   getHistory, clearHistory, sendChat, clearLedger, downloadTrainingExcel, downloadLedgerExcel,
   getSessions, createSession, deleteSession,
+  getModelRoutes,
   setCurrentSessionId as setApiSessionId,
 } from './api'
 import Sidebar from './components/Sidebar'
@@ -19,6 +20,19 @@ import type { AuthUser } from './components/AuthGate'
 import UserMenu from './components/UserMenu'
 import UserAdminPanel from './components/UserAdminPanel'
 import { APP_TITLE } from './appMeta'
+import ModelSelect from './components/ModelSelect'
+import {
+  DEFAULT_CHAT_MODEL,
+  DEFAULT_VISION_MODEL,
+  CHAT_MODEL_OPTIONS,
+  VISION_MODEL_OPTIONS,
+  hasModel,
+  isChatModel,
+  isVisionModel,
+  type ChatModel,
+  type ModelOption,
+  type VisionModel,
+} from './modelOptions'
 
 // 新增 Flow 组件：在此表加一行，不改 App 主逻辑
 const FLOW_COMPONENTS: Partial<Record<Stage, ComponentType<FlowProps>>> = {
@@ -28,6 +42,9 @@ const FLOW_COMPONENTS: Partial<Record<Stage, ComponentType<FlowProps>>> = {
   waiting_ledger_merge_files: LedgerMergeFlow,
   waiting_audit_file: AuditFlow,
 }
+
+const CHAT_MODEL_STORAGE_KEY = 'fadu.chatModel'
+const VISION_MODEL_STORAGE_KEY = 'fadu.visionModel'
 
 // 新增下载功能：在此表加一行，不改 App 主逻辑
 const DOWNLOAD_ACTIONS: Partial<Record<Stage, { label: string; fn: () => void }>> = {
@@ -69,6 +86,16 @@ export default function App() {
   const [stage, setStage] = useState<Stage>('idle')
   const [input, setInput] = useState('')
   const [useKb, setUseKb] = useState(false)
+  const [chatModel, setChatModel] = useState<ChatModel>(() => {
+    const saved = window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY)
+    return saved && isChatModel(saved) ? saved : (saved || DEFAULT_CHAT_MODEL)
+  })
+  const [visionModel, setVisionModel] = useState<VisionModel>(() => {
+    const saved = window.localStorage.getItem(VISION_MODEL_STORAGE_KEY)
+    return saved && isVisionModel(saved) ? saved : (saved || DEFAULT_VISION_MODEL)
+  })
+  const [chatModelOptions, setChatModelOptions] = useState<ModelOption[]>(CHAT_MODEL_OPTIONS)
+  const [visionModelOptions, setVisionModelOptions] = useState<ModelOption[]>(VISION_MODEL_OPTIONS)
   const [kbConvId, setKbConvId] = useState('')
   const [sending, setSending] = useState(false)
   const [versionOpen, setVersionOpen] = useState(false)
@@ -100,8 +127,33 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    async function loadRoutes() {
+      try {
+        const routes = await getModelRoutes()
+        const nextChatOptions = routes.chat_models.length ? routes.chat_models : CHAT_MODEL_OPTIONS
+        const nextVisionOptions = routes.vision_models.length ? routes.vision_models : VISION_MODEL_OPTIONS
+        setChatModelOptions(nextChatOptions)
+        setVisionModelOptions(nextVisionOptions)
+        setChatModel(current => hasModel(current, nextChatOptions) ? current : routes.default_chat_model)
+        setVisionModel(current => hasModel(current, nextVisionOptions) ? current : routes.default_vision_model)
+      } catch {
+        // Keep bundled fallbacks when the runtime model route API is unavailable.
+      }
+    }
+    loadRoutes()
+  }, [])
+
+  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, stage])
+
+  useEffect(() => {
+    window.localStorage.setItem(CHAT_MODEL_STORAGE_KEY, chatModel)
+  }, [chatModel])
+
+  useEffect(() => {
+    window.localStorage.setItem(VISION_MODEL_STORAGE_KEY, visionModel)
+  }, [visionModel])
 
 
   function addMessage(role: 'user' | 'assistant', content: string) {
@@ -120,7 +172,7 @@ export default function App() {
     let accumulated = ''
 
     try {
-      const res = await sendChat(text, useKb, kbConvId, (chunk) => {
+      const res = await sendChat(text, useKb, kbConvId, chatModel, visionModel, (chunk) => {
         accumulated += chunk
         if (!gotFirstChunk) {
           gotFirstChunk = true
@@ -264,6 +316,22 @@ export default function App() {
               </svg>
               功能说明
             </button>
+            <ModelSelect
+              label="文字模型"
+              title="选择本次对话使用的大模型"
+              value={chatModel}
+              options={chatModelOptions}
+              onChange={setChatModel}
+              disabled={sending}
+            />
+            <ModelSelect
+              label="图像模型"
+              title="选择图片和扫描件识别使用的视觉模型"
+              value={visionModel}
+              options={visionModelOptions}
+              onChange={setVisionModel}
+              disabled={sending}
+            />
             <UserMenu user={user} onLogout={onLogout} onOpenAdmin={() => setAdminOpen(true)} />
           </div>
         </div>
@@ -284,6 +352,7 @@ export default function App() {
             <ActiveFlow
               onComplete={reply => { addMessage('assistant', reply); setStage('idle') }}
               onCancel={handleCancel}
+              visionModel={visionModel}
             />
           )}
 

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from routers import chat, training, ledger, auth_request, ledger_merge, audit
+from routers import chat, training, ledger, auth_request, ledger_merge, audit, model_routes
 from routers import auth as auth_router
 from routers import admin_users
 from auth_utils import get_current_user
@@ -33,6 +33,7 @@ app.include_router(ledger.router,       dependencies=_auth)
 app.include_router(auth_request.router, dependencies=_auth)
 app.include_router(ledger_merge.router, dependencies=_auth)
 app.include_router(audit.router,        dependencies=_auth)
+app.include_router(model_routes.router, dependencies=_auth)
 
 # ── 管理员路由（内部再校验 admin 角色）──────────────────────────
 app.include_router(admin_users.router, dependencies=_auth)
@@ -41,7 +42,9 @@ app.include_router(admin_users.router, dependencies=_auth)
 @app.on_event("startup")
 def startup():
     from db import init_db
+    from model_routes import ensure_model_routes_file
     init_db()
+    ensure_model_routes_file()
 
 
 @app.get("/api/health")

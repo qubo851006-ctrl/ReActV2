@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api/ledger", tags=["ledger"])
 # ── 提取（SSE 流式，不写入）──────────────────────────────────
 
 @router.post("/extract")
-async def extract_ledger(files: list[UploadFile] = File(...)):
+async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str = Form("")):
     """
     流式提取案件信息、比对台账、归档文书，但不写入 cases.json / Excel。
     SSE 最终事件携带 preview 数据供前端展示确认。
@@ -58,7 +58,7 @@ async def extract_ledger(files: list[UploadFile] = File(...)):
             if not text:
                 yield send("→ 扫描件，启动视觉 OCR…")
                 try:
-                    text = ocr_pdf_with_vision(fd["bytes"])
+                    text = ocr_pdf_with_vision(fd["bytes"], model=vision_model)
                 except Exception as e:
                     yield send(f"⚠️ OCR 失败：{e}")
             yield send(f"→ 提取到 **{len(text)}** 字符")

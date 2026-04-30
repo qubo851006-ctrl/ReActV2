@@ -5,11 +5,12 @@ import type { LedgerPreview, LedgerCaseData, LedgerStage } from '../types'
 interface Props {
   onComplete: (reply: string) => void
   onCancel: () => void
+  visionModel?: string
 }
 
 type Step = 'upload' | 'processing' | 'confirm' | 'done'
 
-export default function LedgerFlow({ onComplete, onCancel }: Props) {
+export default function LedgerFlow({ onComplete, onCancel, visionModel = '' }: Props) {
   const [files, setFiles] = useState<File[]>([])
   const [logs, setLogs] = useState<string[]>([])
   const [step, setStep] = useState<Step>('upload')
@@ -37,7 +38,7 @@ export default function LedgerFlow({ onComplete, onCancel }: Props) {
     setLogs([])
     setError('')
     try {
-      const res = await extractLedger(files, log => {
+      const res = await extractLedger(files, visionModel, log => {
         setLogs(prev => [...prev, log])
         setTimeout(() => logRef.current?.scrollTo(0, logRef.current.scrollHeight), 50)
       })

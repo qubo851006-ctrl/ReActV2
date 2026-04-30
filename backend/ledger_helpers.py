@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Callable
 
 from llm_client import get_llm_client
-from config import MODEL_CHAT, MODEL_VISION, LEDGER_JSON_PATH, LEDGER_OUTPUT_DIR, LEGAL_ARCHIVE_ROOT
+from config import MODEL_CHAT, LEDGER_JSON_PATH, LEDGER_OUTPUT_DIR, LEGAL_ARCHIVE_ROOT
 from file_store import atomic_write_bytes, atomic_write_text, file_lock
+from model_routes import resolve_vision_model
 from upload_validation import safe_upload_name
 
 
@@ -44,17 +45,18 @@ def extract_file_text(file_bytes: bytes, filename: str) -> str:
     return text.strip()
 
 
-def ocr_pdf_with_vision(pdf_bytes: bytes) -> str:
+def ocr_pdf_with_vision(pdf_bytes: bytes, model: str | None = None) -> str:
     """用视觉模型逐页识别扫描版 PDF，返回全文。"""
     import fitz
     client = get_llm_client()
+    selected_model = resolve_vision_model(model)
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     all_texts = []
     for page in doc:
         pix = page.get_pixmap(dpi=150)
         img_b64 = base64.b64encode(pix.tobytes("jpeg", jpg_quality=85)).decode()
         response = client.chat.completions.create(
-            model=MODEL_VISION,
+            model=selected_model,
             messages=[{
                 "role": "user",
                 "content": [

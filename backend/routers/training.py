@@ -22,6 +22,7 @@ async def extract_training(
     notice_pdf: UploadFile = File(...),
     signin_img: UploadFile = File(...),
     department: str = Form(""),
+    vision_model: str = Form(""),
 ):
     """
     提取培训信息并归档文件，但不写入 Excel。
@@ -52,7 +53,7 @@ async def extract_training(
             f.write(signin_bytes)
 
         notice_text = extract_pdf_text(notice_path)
-        sign_in_info = count_attendees(signin_path)
+        sign_in_info = count_attendees(signin_path, model=vision_model)
         category = classify_training(notice_text, sign_in_info["topic"])
         archive_path = archive_files(
             notice_path=notice_path,

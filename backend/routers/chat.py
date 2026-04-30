@@ -8,9 +8,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import httpx
 
-from config import MODEL_CHAT, DATA_ROOT, ZHISHU_API_KEY, ZHISHU_BASE_URL, AI_HTTP_VERIFY_SSL
+from config import DATA_ROOT, ZHISHU_API_KEY, ZHISHU_BASE_URL, AI_HTTP_VERIFY_SSL
 from file_store import atomic_write_text, file_lock, safe_child_path
 from llm_client import format_llm_error, get_llm_client
+from model_routes import resolve_chat_model, resolve_intent_model, resolve_vision_model
 from auth_utils import get_current_user
 from models import User
 
@@ -79,7 +80,32 @@ def _chunk_delta_content(chunk) -> str | None:
     return getattr(delta, "content", None)
 
 
+def _is_model_status_question(message: str) -> bool:
+    normalized = re.sub(r"\s+", "", message.lower())
+    return any(
+        keyword in normalized
+        for keyword in [
+            "你是什么模型",
+            "当前模型",
+            "用的什么模型",
+            "模型是什么",
+            "现在是什么模型",
+        ]
+    )
+
+
 # ── LLM 调用函数 ─────────────────────────────────────────────────
+
+def _resolve_chat_model(requested: str | None, allowed_models: list[str] | None = None, default_model: str | None = None) -> str:
+    if allowed_models is not None and default_model is not None:
+        normalized = (requested or "").strip()
+        if normalized and normalized in allowed_models:
+            return normalized
+        if default_model in allowed_models:
+            return default_model
+        return allowed_models[0] if allowed_models else default_model
+    return resolve_chat_model(requested)
+
 
 def _classify(client, message: str) -> dict:
     """
@@ -103,7 +129,7 @@ next_stage 可选值（仅当用户有明确操作需求时填入，否则填 nu
 waiting_files / waiting_ledger_files / waiting_auth_file / waiting_ledger_merge_files / waiting_audit_file"""
 
     resp = client.chat.completions.create(
-        model=MODEL_CHAT,
+        model=resolve_intent_model(),
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": message},
@@ -128,7 +154,7 @@ waiting_files / waiting_ledger_files / waiting_auth_file / waiting_ledger_merge_
         return {"intent": "other", "company": None, "next_stage": None}
 
 
-def _stream_reply(client, message: str, history: list):
+def _stream_reply(client, message: str, history: list, model: str):
     """
     【优化1】生成器：逐 token yield 文本块，供 SSE 流式推送。
     替代原来的 _general_chat（不再要求 JSON 格式输出）。
@@ -146,7 +172,7 @@ def _stream_reply(client, message: str, history: list):
     messages.append({"role": "user", "content": message})
 
     stream = client.chat.completions.create(
-        model=MODEL_CHAT,
+        model=model,
         messages=messages,
         stream=True,
         max_tokens=500,
@@ -333,6 +359,8 @@ class ChatRequest(BaseModel):
     use_kb: bool = False
     kb_conversation_id: str = ""
     session_id: str = ""
+    model: str | None = None
+    vision_model: str | None = None
 
 
 # 固定意图 → 固定回复映射（直接返回，不需要额外 LLM 调用）
@@ -371,8 +399,16 @@ INTENT_RESPONSES = {
 def chat(req: ChatRequest, user: User = Depends(get_current_user)):
     uid = user.id
     sid = req.session_id
+    selected_model = _resolve_chat_model(req.model)
+    selected_vision_model = resolve_vision_model(req.vision_model)
     def generate():
         history = load_history(uid, sid)
+
+        if _is_model_status_question(req.message):
+            reply = f"当前文字模型：{selected_model}\n当前图像模型：{selected_vision_model}"
+            _append_and_save(history, req.message, reply, uid, sid)
+            yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
+            return
 
         # ── 知识库模式（外部服务，无法流式）────────────────────────
         if req.use_kb:
@@ -442,7 +478,7 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
 
         accumulated = ""
         try:
-            for chunk in _stream_reply(client, req.message, history):
+            for chunk in _stream_reply(client, req.message, history, selected_model):
                 accumulated += chunk
                 yield _sse({"type": "chunk", "text": chunk})
         except Exception as e:

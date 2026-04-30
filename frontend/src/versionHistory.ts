@@ -2,6 +2,17 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.5',
+    date: '2026-04-30',
+    changes: [
+      { type: 'feat', text: '新增右上角文字模型与图像模型手工切换：普通对话可选择 Qwen2.5 72B、DeepSeek V3、GLM-5，图像与扫描件识别默认使用 Qwen2.5 VL 72B' },
+      { type: 'feat', text: '新增运行时模型路由：模型列表、默认文字模型、默认意图识别模型、默认图像模型统一读取 data/model_routes.json，后续调整模型配置无需重启后端，刷新前端即可生效' },
+      { type: 'feat', text: '培训签到图片识别、案件台账扫描版 PDF OCR、授权呈批件扫描版 PDF OCR 已接入图像模型选择' },
+      { type: 'fix', text: '当用户询问“当前模型/你是什么模型”时，后端直接返回当前文字模型和图像模型，避免大模型自报身份不准确' },
+      { type: 'fix', text: '默认文字模型与意图识别模型固定为 qwen2.5-72b，避免服务器旧 .env 中的 MODEL_CHAT 残留配置影响首次运行默认值' },
+    ],
+  },
+  {
     version: 'v2.4',
     date: '2026-04-29',
     changes: [

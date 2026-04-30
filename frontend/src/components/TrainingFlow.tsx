@@ -5,11 +5,12 @@ import type { TrainingResult } from '../types'
 interface Props {
   onComplete: (reply: string) => void
   onCancel: () => void
+  visionModel?: string
 }
 
 type Step = 'upload' | 'dept' | 'processing' | 'confirm' | 'done'
 
-export default function TrainingFlow({ onComplete, onCancel }: Props) {
+export default function TrainingFlow({ onComplete, onCancel, visionModel = '' }: Props) {
   const [step, setStep] = useState<Step>('upload')
   const [noticePdf, setNoticePdf] = useState<File | null>(null)
   const [signinImg, setSigninImg] = useState<File | null>(null)
@@ -27,7 +28,7 @@ export default function TrainingFlow({ onComplete, onCancel }: Props) {
     setStep('processing')
     setError('')
     try {
-      const res = await extractTraining(noticePdf, signinImg, department)
+      const res = await extractTraining(noticePdf, signinImg, department, visionModel)
       setExtracted(res)
       setEdited({ ...res })
       setStep('confirm')

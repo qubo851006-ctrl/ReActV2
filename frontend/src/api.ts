@@ -1,4 +1,5 @@
 import type { TrainingResult, LedgerPreview, LedgerCaseData, SessionMeta } from './types'
+import type { ModelRoutes } from './modelOptions'
 
 const BASE = '/api'
 
@@ -55,16 +56,31 @@ export async function clearHistory(sessionId: string) {
   await apiFetch(`${BASE}/chat/history?session_id=${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
 
+export async function getModelRoutes(): Promise<ModelRoutes> {
+  const r = await apiFetch(`${BASE}/model-routes`)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
 export async function sendChat(
   message: string,
   useKb: boolean,
   kbConvId: string,
+  model: string,
+  visionModel: string,
   onChunk: (text: string) => void,
 ): Promise<{ reply: string; next_stage: string; kb_conversation_id: string }> {
   const resp = await apiFetch(`${BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, use_kb: useKb, kb_conversation_id: kbConvId, session_id: _sid }),
+    body: JSON.stringify({
+      message,
+      use_kb: useKb,
+      kb_conversation_id: kbConvId,
+      session_id: _sid,
+      model,
+      vision_model: visionModel,
+    }),
   })
   if (!resp.ok) throw new Error(await resp.text())
 
@@ -101,11 +117,13 @@ export async function extractTraining(
   noticePdf: File,
   signinImg: File,
   department: string,
+  visionModel: string,
 ): Promise<TrainingResult> {
   const form = new FormData()
   form.append('notice_pdf', noticePdf)
   form.append('signin_img', signinImg)
   form.append('department', department)
+  form.append('vision_model', visionModel)
   const r = await apiFetch(`${BASE}/training/extract`, { method: 'POST', body: form })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
@@ -129,10 +147,12 @@ export function downloadTrainingExcel() {
 
 export async function extractLedger(
   files: File[],
+  visionModel: string,
   onLog: (log: string) => void,
 ): Promise<LedgerPreview> {
   const form = new FormData()
   for (const f of files) form.append('files', f)
+  form.append('vision_model', visionModel)
 
   const resp = await apiFetch(`${BASE}/ledger/extract`, { method: 'POST', body: form })
   if (!resp.ok) throw new Error(await resp.text())
@@ -262,10 +282,11 @@ export async function downloadAuditExcel(rows: AuditRow[], originalFilename: str
 
 // ── 授权请示 ──────────────────────────────────────────────────
 
-export async function processAuthRequest(pdfFile: File) {
+export async function processAuthRequest(pdfFile: File, visionModel: string) {
   const form = new FormData()
   form.append('pdf_file', pdfFile)
   form.append('session_id', _sid)
+  form.append('vision_model', visionModel)
   const r = await apiFetch(`${BASE}/auth-request/process`, { method: 'POST', body: form })
   if (!r.ok) throw new Error(await r.text())
   return r.json()

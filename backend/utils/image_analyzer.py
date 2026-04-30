@@ -6,11 +6,11 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from config import AI_HTTP_VERIFY_SSL
 from llm_client import build_ai_http_headers
+from model_routes import resolve_vision_model
 
 warnings.filterwarnings("ignore")  # 屏蔽内网 SSL 警告
 load_dotenv(override=True)
 
-MODEL_VISION = os.getenv("MODEL_VISION", "qwen2.5-vl-72b")
 
 # 两次识别结果允许的最大偏差，超过则标记为低置信度
 _COUNT_DIFF_THRESHOLD = 2
@@ -30,10 +30,10 @@ def get_client() -> OpenAI:
     )
 
 
-def _call_vision(client: OpenAI, image_url: str, prompt: str) -> str:
+def _call_vision(client: OpenAI, image_url: str, prompt: str, model: str) -> str:
     """向视觉模型发送一次请求，返回原始文本"""
     response = client.chat.completions.create(
-        model=MODEL_VISION,
+        model=model,
         messages=[
             {
                 "role": "user",
@@ -47,7 +47,7 @@ def _call_vision(client: OpenAI, image_url: str, prompt: str) -> str:
     return response.choices[0].message.content.strip()
 
 
-def count_attendees(image_path: str) -> dict:
+def count_attendees(image_path: str, model: str | None = None) -> dict:
     """
     分析签到表图片，统计参与人数及提取抬头信息。
     包含自我反思步骤：第一次识别后进行二次验证，
@@ -58,6 +58,7 @@ def count_attendees(image_path: str) -> dict:
       - reflection_note: 反思检查的说明文字
     """
     client = get_client()
+    selected_model = resolve_vision_model(model)
 
     image_data = encode_image(image_path)
     ext = image_path.split(".")[-1].lower()
@@ -92,7 +93,7 @@ def count_attendees(image_path: str) -> dict:
 """
 
     # 第一次识别
-    first_text = _call_vision(client, image_url, first_prompt)
+    first_text = _call_vision(client, image_url, first_prompt, selected_model)
     first_result = parse_sign_in_result(first_text)
     first_count = first_result["count"]
 
@@ -114,7 +115,7 @@ def count_attendees(image_path: str) -> dict:
 """
 
     # 第二次独立核查
-    reflect_text = _call_vision(client, image_url, reflect_prompt)
+    reflect_text = _call_vision(client, image_url, reflect_prompt, selected_model)
     second_result = parse_sign_in_result(reflect_text)
     second_count = second_result["count"]
 

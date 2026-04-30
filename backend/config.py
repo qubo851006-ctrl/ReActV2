@@ -3,8 +3,34 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-MODEL_CHAT   = os.getenv("MODEL_CHAT",   "glm-5-outside")
+MODEL_CHAT   = os.getenv("MODEL_CHAT",   "qwen2.5-72b")
+MODEL_INTENT = os.getenv("MODEL_INTENT", "qwen2.5-72b")
 MODEL_VISION = os.getenv("MODEL_VISION", "qwen2.5-vl-72b")
+
+
+def resolve_model(requested: str | None, allowed_models: list[str], default_model: str) -> str:
+    normalized = (requested or "").strip()
+    if normalized and normalized in allowed_models:
+        return normalized
+    if default_model in allowed_models:
+        return default_model
+    return allowed_models[0] if allowed_models else default_model
+
+
+AI_CHAT_MODELS = [
+    item.strip()
+    for item in os.getenv("AI_CHAT_MODELS", "qwen2.5-72b,DeepSeek-V3,glm-5-outside").split(",")
+    if item.strip()
+]
+if MODEL_CHAT and MODEL_CHAT not in AI_CHAT_MODELS:
+    AI_CHAT_MODELS.insert(0, MODEL_CHAT)
+AI_VISION_MODELS = [
+    item.strip()
+    for item in os.getenv("AI_VISION_MODELS", "qwen2.5-vl-72b").split(",")
+    if item.strip()
+]
+if MODEL_VISION and MODEL_VISION not in AI_VISION_MODELS:
+    AI_VISION_MODELS.insert(0, MODEL_VISION)
 
 AIRCHINA_API_KEY  = os.getenv("AIRCHINA_API_KEY",  "")
 AIRCHINA_BASE_URL = os.getenv("AIRCHINA_BASE_URL",  "")

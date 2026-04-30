@@ -20,6 +20,7 @@ import ReactMarkdown from 'react-markdown'
 interface Props {
   onComplete: (reply: string) => void
   onCancel: () => void
+  visionModel?: string
 }
 
 interface AuthResult {
@@ -34,7 +35,7 @@ interface AuthResult {
   ledger_filename: string | null
 }
 
-export default function AuthFlow({ onComplete, onCancel }: Props) {
+export default function AuthFlow({ onComplete, onCancel, visionModel = '' }: Props) {
   const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [processing, setProcessing] = useState(false)
   const [result, setResult] = useState<AuthResult | null>(null)
@@ -48,7 +49,7 @@ export default function AuthFlow({ onComplete, onCancel }: Props) {
     setProcessing(true)
     setError('')
     try {
-      const res = await processAuthRequest(pdfFile)
+      const res = await processAuthRequest(pdfFile, visionModel)
       setResult(res as AuthResult)
     } catch (e: unknown) {
       setError(getErrorMessage(e, '处理失败'))

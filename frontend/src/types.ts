@@ -22,6 +22,7 @@ export interface Message {
 export interface FlowProps {
   onComplete: (reply: string) => void
   onCancel: () => void
+  visionModel?: string
 }
 
 /** 侧边栏技能按钮的 key，新增技能在此加一个联合类型成员 */

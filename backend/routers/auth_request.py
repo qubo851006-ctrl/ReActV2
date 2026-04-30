@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/auth-request", tags=["auth-request"])
 async def process_auth_request(
     pdf_file: UploadFile = File(...),
     session_id: str = Form(""),
+    vision_model: str = Form(""),
     request: Request = None,
     db: DBSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -53,7 +54,7 @@ async def process_auth_request(
     pdf_text = pdf_text.strip()
 
     if not pdf_text:
-        pdf_text = ocr_pdf_with_vision(pdf_bytes)
+        pdf_text = ocr_pdf_with_vision(pdf_bytes, model=vision_model)
 
     # AI 提取字段
     info = extract_approval_info(pdf_text)
