@@ -71,6 +71,14 @@ def _append_and_save(history: list, user_msg: str, assistant_msg: str, user_id: 
     save_history(history, user_id, session_id)
 
 
+def _chunk_delta_content(chunk) -> str | None:
+    choices = getattr(chunk, "choices", None) or []
+    if not choices:
+        return None
+    delta = getattr(choices[0], "delta", None)
+    return getattr(delta, "content", None)
+
+
 # ── LLM 调用函数 ─────────────────────────────────────────────────
 
 def _classify(client, message: str) -> dict:
@@ -144,7 +152,7 @@ def _stream_reply(client, message: str, history: list):
         max_tokens=500,
     )
     for chunk in stream:
-        delta = chunk.choices[0].delta.content
+        delta = _chunk_delta_content(chunk)
         if delta:
             yield delta
 

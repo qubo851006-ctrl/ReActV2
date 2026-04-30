@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -10,6 +11,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from file_store import atomic_write_bytes, atomic_write_text, safe_child_path
 from llm_client import build_ai_http_headers, format_llm_error
+from routers.chat import _chunk_delta_content
 from upload_validation import (
     UploadValidationError,
     validate_excel_upload,
@@ -73,6 +75,16 @@ class FileStoreTests(unittest.TestCase):
 
 
 class LlmClientTests(unittest.TestCase):
+    def test_stream_chunk_without_choices_is_ignored(self):
+        self.assertIsNone(_chunk_delta_content(SimpleNamespace(choices=[])))
+
+    def test_stream_chunk_extracts_delta_content(self):
+        chunk = SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content="你好"))]
+        )
+
+        self.assertEqual(_chunk_delta_content(chunk), "你好")
+
     def test_host_header_is_optional(self):
         self.assertEqual(build_ai_http_headers("aiplus.airchina.com.cn:18080"), {"Host": "aiplus.airchina.com.cn:18080"})
         self.assertEqual(build_ai_http_headers(""), {})
