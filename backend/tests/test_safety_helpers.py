@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 TEST_TMP_ROOT = BACKEND_DIR / "tests" / "tmp"
@@ -147,6 +148,117 @@ class LlmClientTests(unittest.TestCase):
         self.assertIn("AI 服务连接失败", message)
         self.assertIn("证书校验失败", message)
         self.assertIn("AI_HTTP_VERIFY_SSL=false", message)
+
+
+class OllamaModelRoutingTests(unittest.TestCase):
+    """视觉客户端路由：Ollama 本地模型 vs 云端 AI 平台"""
+
+    def _make_mock_client(self):
+        return MagicMock()
+
+    def test_routes_to_ollama_when_url_configured(self):
+        """qwen3-vl:8b + OLLAMA_BASE_URL 已设置 → 使用 Ollama 客户端"""
+        import utils.image_analyzer as ia
+        mock_ollama = self._make_mock_client()
+        mock_regular = self._make_mock_client()
+        with patch.object(ia, 'OLLAMA_BASE_URL', 'http://192.168.9.226:11434/v1'), \
+             patch.object(ia, 'get_ollama_client', return_value=mock_ollama) as spy_ollama, \
+             patch.object(ia, 'get_client', return_value=mock_regular) as spy_regular:
+            ia.get_vision_client('qwen3-vl:8b')
+            spy_ollama.assert_called_once()
+            spy_regular.assert_not_called()
+
+    def test_falls_back_to_cloud_for_non_ollama_model(self):
+        """云端模型（qwen2.5-vl-72b）始终走 AI 平台客户端"""
+        import utils.image_analyzer as ia
+        mock_client = self._make_mock_client()
+        with patch.object(ia, 'get_ollama_client', return_value=mock_client) as spy_ollama, \
+             patch.object(ia, 'get_client', return_value=mock_client) as spy_regular:
+            ia.get_vision_client('qwen2.5-vl-72b')
+            spy_regular.assert_called_once()
+            spy_ollama.assert_not_called()
+
+    def test_falls_back_to_cloud_when_ollama_url_empty(self):
+        """qwen3-vl:8b 但 OLLAMA_BASE_URL 为空 → 回退到 AI 平台客户端"""
+        import utils.image_analyzer as ia
+        mock_client = self._make_mock_client()
+        with patch.object(ia, 'OLLAMA_BASE_URL', ''), \
+             patch.object(ia, 'get_ollama_client', return_value=mock_client) as spy_ollama, \
+             patch.object(ia, 'get_client', return_value=mock_client) as spy_regular:
+            ia.get_vision_client('qwen3-vl:8b')
+            spy_regular.assert_called_once()
+            spy_ollama.assert_not_called()
+
+
+class OllamaModelLabelTests(unittest.TestCase):
+    """Ollama 模型在运行时路由中的标签与加载"""
+
+    def test_ollama_model_label_in_public_routes(self):
+        """public_model_routes 返回 qwen3-vl:8b 的中文标签"""
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            path = Path(tmpdir) / "model_routes.json"
+            save_model_routes({
+                "vision_models": ["qwen2.5-vl-72b", "qwen3-vl:8b"],
+            }, path)
+            routes = public_model_routes(path)
+            labels = {m["value"]: m["label"] for m in routes["vision_models"]}
+            self.assertEqual(labels.get("qwen3-vl:8b"), "Qwen3 VL 8B (本地)")
+
+    def test_ollama_model_preserved_after_load(self):
+        """model_routes.json 中包含 qwen3-vl:8b 时正确加载，不丢失"""
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            path = Path(tmpdir) / "model_routes.json"
+            path.write_text(json.dumps({
+                "vision_models": ["qwen2.5-vl-72b", "qwen3-vl:8b"],
+            }), encoding="utf-8")
+            routes = load_model_routes(path)
+            self.assertIn("qwen3-vl:8b", routes["vision_models"])
+
+    def test_ollama_model_is_valid_default_vision_model(self):
+        """可以将 qwen3-vl:8b 设为默认视觉模型"""
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            path = Path(tmpdir) / "model_routes.json"
+            save_model_routes({
+                "default_vision_model": "qwen3-vl:8b",
+                "vision_models": ["qwen2.5-vl-72b", "qwen3-vl:8b"],
+            }, path)
+            routes = load_model_routes(path)
+            self.assertEqual(routes["default_vision_model"], "qwen3-vl:8b")
+
+
+class SignInParseTests(unittest.TestCase):
+    """parse_sign_in_result：AI 返回文本解析"""
+
+    def setUp(self):
+        from utils.image_analyzer import parse_sign_in_result
+        self.parse = parse_sign_in_result
+
+    def test_parses_full_result(self):
+        text = "主题：安全培训\n地点：会议室A\n时间：2026-05-08\n人数：23"
+        result = self.parse(text)
+        self.assertEqual(result["topic"], "安全培训")
+        self.assertEqual(result["location"], "会议室A")
+        self.assertEqual(result["date"], "2026-05-08")
+        self.assertEqual(result["count"], 23)
+
+    def test_count_extracts_digits_only(self):
+        """人数字段含多余文字时只取数字"""
+        result = self.parse("人数：共 12 人")
+        self.assertEqual(result["count"], 12)
+
+    def test_missing_fields_default_to_empty(self):
+        """缺失字段返回默认空值，不报错"""
+        result = self.parse("人数：5")
+        self.assertEqual(result["topic"], "")
+        self.assertEqual(result["count"], 5)
+
+    def test_invalid_count_defaults_to_zero(self):
+        """人数无法解析时返回 0"""
+        result = self.parse("人数：不详")
+        self.assertEqual(result["count"], 0)
 
 
 if __name__ == "__main__":

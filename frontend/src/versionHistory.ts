@@ -6,6 +6,7 @@ export const VERSION_ENTRIES: VersionEntry[] = [
     date: '2026-05-08',
     changes: [
       { type: 'feat', text: '图像模型新增 Qwen3 VL 8B（本地）选项，支持通过本地 Ollama 服务进行图像分析，在 .env 中配置 OLLAMA_BASE_URL 后即可启用' },
+      { type: 'feat', text: '新增后端单元测试：Ollama 客户端路由逻辑、模型标签、签到表解析，共 25 个测试用例全部覆盖' },
     ],
   },
   {
