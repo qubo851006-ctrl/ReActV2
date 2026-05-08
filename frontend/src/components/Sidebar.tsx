@@ -19,11 +19,11 @@ interface Props {
 }
 
 const skills = [
-  { key: 'training' as const, icon: '📊', label: '培训统计及归档', desc: '上传培训通知+签到表，自动统计归档' },
-  { key: 'ledger' as const,   icon: '⚖️', label: '案件台账生成',   desc: '上传法律文书，自动提取并更新台账' },
-  { key: 'auth' as const,     icon: '📝', label: '授权请示起草',   desc: '上传呈批件，AI起草授权请示Word' },
-  { key: 'merge' as const,    icon: '🔀', label: '三台账合并',     desc: '合并采购/合同/财务系统导出台账' },
-  { key: 'audit' as const,   icon: '🔍', label: '审计问题分析',   desc: '上传审计汇总表，AI分类并生成报告' },
+  { key: 'training' as const, icon: '📊', label: '培训统计及归档', desc: '上传培训通知+签到表，自动统计归档', iconBg: 'bg-blue-500/15',    iconText: 'text-blue-400' },
+  { key: 'ledger' as const,   icon: '⚖️', label: '案件台账生成',   desc: '上传法律文书，自动提取并更新台账', iconBg: 'bg-violet-500/15', iconText: 'text-violet-400' },
+  { key: 'auth' as const,     icon: '📝', label: '授权请示起草',   desc: '上传呈批件，AI起草授权请示Word',   iconBg: 'bg-emerald-500/15',iconText: 'text-emerald-400' },
+  { key: 'merge' as const,    icon: '🔀', label: '三台账合并',     desc: '合并采购/合同/财务系统导出台账',   iconBg: 'bg-amber-500/15',  iconText: 'text-amber-400' },
+  { key: 'audit' as const,    icon: '🔍', label: '审计问题分析',   desc: '上传审计汇总表，AI分类并生成报告', iconBg: 'bg-red-500/15',    iconText: 'text-red-400' },
 ]
 
 function groupSessions(sessions: SessionMeta[]) {
@@ -193,7 +193,9 @@ export default function Sidebar({
             `}
           >
             <div className="flex items-center gap-2.5">
-              <span className="text-lg">{s.icon}</span>
+              <span className={`w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-lg text-base ${s.iconBg} ${s.iconText}`}>
+                {s.icon}
+              </span>
               <div>
                 <div className="text-sm font-medium text-slate-200 group-hover:text-white transition-colors">{s.label}</div>
                 <div className="text-xs text-slate-500 mt-0.5 leading-tight">{s.desc}</div>

@@ -2,6 +2,17 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.11',
+    date: '2026-05-08',
+    changes: [
+      { type: 'feat', text: '引入 Noto Sans SC 字体：替换系统默认中文字体，中文显示更精致统一' },
+      { type: 'feat', text: '空会话欢迎页：无对话时显示 6 宫格功能入口卡片，点击直接触发对应技能，告别空白页面' },
+      { type: 'feat', text: '侧边栏技能图标升级：每个技能添加专属彩色背景圆角块（培训蓝、台账紫、授权绿、合并琥珀、审计红），一眼可辨' },
+      { type: 'feat', text: '输入框视觉优化：input 与发送按钮合并为统一外壳容器，聚焦时亮起 indigo 双圈发光效果' },
+      { type: 'feat', text: '整体配色调整：主背景改为更深的深蓝色（#0a0f1e），滚动条换用 indigo 色调，视觉层次更清晰' },
+    ],
+  },
+  {
     version: 'v2.10',
     date: '2026-05-08',
     changes: [

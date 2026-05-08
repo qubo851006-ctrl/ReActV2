@@ -398,6 +398,33 @@ export default function App() {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
+          {messages.length === 0 && stage === 'idle' && (
+            <div className="h-full flex flex-col items-center justify-center select-none">
+              <div className="text-4xl mb-3">📋</div>
+              <div className="text-lg font-semibold text-slate-200 mb-1">法度云图</div>
+              <div className="text-sm text-slate-500 mb-8">AI 驱动的法务合规智能工具</div>
+              <div className="grid grid-cols-2 gap-3 w-full max-w-md">
+                {[
+                  { icon: '📊', label: '培训统计', desc: '培训通知 + 签到表归档', color: 'border-blue-500/30 hover:border-blue-500/60 hover:bg-blue-500/5',    key: 'training' as const },
+                  { icon: '⚖️', label: '案件台账', desc: '法律文书 → 台账提取',   color: 'border-violet-500/30 hover:border-violet-500/60 hover:bg-violet-500/5', key: 'ledger'   as const },
+                  { icon: '📝', label: '授权请示', desc: '呈批件 → 授权书起草',   color: 'border-emerald-500/30 hover:border-emerald-500/60 hover:bg-emerald-500/5',key: 'auth'     as const },
+                  { icon: '🔀', label: '三台账合并', desc: '合同/采购/财务合并',  color: 'border-amber-500/30 hover:border-amber-500/60 hover:bg-amber-500/5',    key: 'merge'    as const },
+                  { icon: '🔍', label: '审计分析', desc: 'AI分类审计问题',        color: 'border-red-500/30 hover:border-red-500/60 hover:bg-red-500/5',          key: 'audit'    as const },
+                  { icon: '💬', label: '直接对话', desc: '询问、查询、或聊任意话题', color: 'border-slate-600/50 hover:border-slate-500 hover:bg-slate-700/20',    key: null },
+                ].map(item => (
+                  <button
+                    key={item.label}
+                    onClick={() => item.key && triggerSkill(item.key)}
+                    className={`text-left px-4 py-3 rounded-xl border bg-slate-800/40 transition-all ${item.color}`}
+                  >
+                    <div className="text-xl mb-1">{item.icon}</div>
+                    <div className="text-sm font-medium text-slate-200">{item.label}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{item.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {messages.map((msg, i) => (
             <ChatMessage key={i} message={msg} />
           ))}
@@ -459,8 +486,8 @@ export default function App() {
         </div>
 
         {/* 输入栏 */}
-        <div className="flex-shrink-0 px-6 py-4 border-t border-slate-700/50 bg-slate-900/30">
-          <div className="flex gap-3 items-center">
+        <div className="flex-shrink-0 px-6 py-4 border-t border-slate-700/40 bg-slate-900/20">
+          <div className="flex items-center bg-slate-800/80 border border-slate-700/60 rounded-2xl px-1 py-1 gap-1 focus-within:border-indigo-500/60 focus-within:ring-2 focus-within:ring-indigo-500/20 transition-all">
             <input
               type="text"
               value={input}
@@ -469,20 +496,20 @@ export default function App() {
               placeholder={isIdle || isDownloadStage ? '有什么可以帮您？' : '请完成当前操作…'}
               disabled={(!isIdle && !isDownloadStage) || sending}
               className="
-                flex-1 bg-slate-800 border border-slate-700 rounded-xl
-                px-4 py-3 text-sm text-white placeholder-slate-500
-                outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30
-                disabled:opacity-50 disabled:cursor-not-allowed transition-colors
+                flex-1 bg-transparent border-none
+                px-3 py-2.5 text-sm text-white placeholder-slate-500
+                outline-none
+                disabled:opacity-50 disabled:cursor-not-allowed
               "
             />
             <button
               onClick={handleSend}
               disabled={(!isIdle && !isDownloadStage) || !input.trim() || sending}
               className="
-                px-4 py-3 bg-indigo-600 hover:bg-indigo-500
+                flex-shrink-0 w-9 h-9 flex items-center justify-center
+                bg-indigo-600 hover:bg-indigo-500
                 disabled:opacity-40 disabled:cursor-not-allowed
-                text-white text-sm rounded-xl transition-colors
-                flex items-center gap-2
+                text-white rounded-xl transition-colors
               "
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
