@@ -98,6 +98,7 @@ export default function App() {
   const [visionModelOptions, setVisionModelOptions] = useState<ModelOption[]>(VISION_MODEL_OPTIONS)
   const [kbConvId, setKbConvId] = useState('')
   const [sendingMap, setSendingMap] = useState<Record<string, boolean>>({})
+  const [creatingSession, setCreatingSession] = useState(false)
   const [versionOpen, setVersionOpen] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionMeta[]>([])
@@ -189,6 +190,8 @@ export default function App() {
 
     try {
       const res = await sendChat(text, useKb, kbConvId, chatModel, visionModel, (chunk) => {
+        // 用户已切换到其他会话，停止向当前视图写入该会话的流式内容
+        if (currentSessionIdRef.current !== sessionId) return
         accumulated += chunk
         if (!gotFirstChunk) {
           gotFirstChunk = true
@@ -203,7 +206,7 @@ export default function App() {
         }
       })
 
-      if (res.reply) {
+      if (res.reply && currentSessionIdRef.current === sessionId) {
         if (gotFirstChunk) {
           setMessages(prev => {
             const updated = [...prev]
@@ -260,10 +263,16 @@ export default function App() {
   }
 
   async function handleNewSession() {
-    const { session_id } = await createSession()
-    const list = await getSessions()
-    setSessions(list)
-    await switchSession(session_id)
+    if (creatingSession) return
+    setCreatingSession(true)
+    try {
+      const { session_id } = await createSession()
+      const list = await getSessions()
+      setSessions(list)
+      await switchSession(session_id)
+    } finally {
+      setCreatingSession(false)
+    }
   }
 
   async function handleDeleteSession(sessionId: string) {
@@ -298,6 +307,7 @@ export default function App() {
         user={user}
         sessions={sessions}
         currentSessionId={currentSessionId}
+        creatingSession={creatingSession}
         onSkill={triggerSkill}
         onClearLedger={handleClearLedger}
         onClearChat={handleClearChat}

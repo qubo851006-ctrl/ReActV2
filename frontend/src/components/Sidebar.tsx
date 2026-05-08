@@ -8,6 +8,7 @@ interface Props {
   user: AuthUser
   sessions: SessionMeta[]
   currentSessionId: string
+  creatingSession?: boolean
   onSkill: (skill: SkillKey) => void
   onClearLedger: () => void
   onClearChat: () => void
@@ -88,7 +89,7 @@ function SessionItem({
 }
 
 export default function Sidebar({
-  stage, useKb, user, sessions, currentSessionId,
+  stage, useKb, user, sessions, currentSessionId, creatingSession = false,
   onSkill, onClearLedger, onClearChat, onToggleKb,
   onNewSession, onSwitchSession, onDeleteSession,
 }: Props) {
@@ -112,12 +113,19 @@ export default function Sidebar({
       <div className="px-3 pt-3 pb-2 border-b border-slate-700/50">
         <button
           onClick={onNewSession}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-slate-700/50 transition-colors border border-slate-700/50 hover:border-slate-600"
+          disabled={creatingSession}
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-slate-700/50 transition-colors border border-slate-700/50 hover:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          新建对话
+          {creatingSession ? (
+            <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12a8 8 0 018-8v8H4z" />
+            </svg>
+          ) : (
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+          )}
+          {creatingSession ? '创建中…' : '新建对话'}
         </button>
 
         {sessions.length > 0 && (
