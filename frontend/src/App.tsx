@@ -82,7 +82,12 @@ const SKILL_TRIGGERS: Record<SkillKey, { msg: string; reply: string; stage: Stag
 }
 
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>([])
+  // 每个会话独立维护消息列表：messagesMap[sessionId] = Message[]
+  // 切换会话时不清空已缓存的消息，Session A 在后台流式输出时消息直接写入 A 的队列
+  const [messagesMap, setMessagesMap] = useState<Record<string, Message[]>>({})
+  const messagesMapRef = useRef<Record<string, Message[]>>({})
+  messagesMapRef.current = messagesMap
+
   const [stages, setStages] = useState<Record<string, Stage>>({})
   const [input, setInput] = useState('')
   const [useKb, setUseKb] = useState(false)
@@ -105,6 +110,9 @@ export default function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string>('')
   const currentSessionIdRef = useRef<string>('')
   currentSessionIdRef.current = currentSessionId
+
+  // 从 map 中取当前会话的派生值
+  const messages = messagesMap[currentSessionId] ?? []
   const stage: Stage = stages[currentSessionId] ?? 'idle'
   const sending = sendingMap[currentSessionId] ?? false
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -123,14 +131,14 @@ export default function App() {
         setCurrentSessionId(session_id)
         setApiSessionId(session_id)
         setSessions(list)
-        setMessages([])
+        setMessagesMap({ [session_id]: [] })
       } else {
         setSessions(list)
         const first = list[0].id
         setCurrentSessionId(first)
         setApiSessionId(first)
         const { messages: msgs } = await getHistory(first)
-        setMessages(msgs ?? [])
+        setMessagesMap({ [first]: msgs ?? [] })
       }
     }
     init()
@@ -165,23 +173,36 @@ export default function App() {
     window.localStorage.setItem(VISION_MODEL_STORAGE_KEY, visionModel)
   }, [visionModel])
 
-
+  // 向当前会话添加消息（同步操作，安全使用 ref）
   function addMessage(role: 'user' | 'assistant', content: string) {
-    setMessages(prev => [...prev, { role, content }])
+    const sessionId = currentSessionIdRef.current
+    setMessagesMap(prev => ({
+      ...prev,
+      [sessionId]: [...(prev[sessionId] ?? []), { role, content }],
+    }))
   }
 
   async function handleSend() {
     const text = input.trim()
-    const sessionId = currentSessionId
+    const sessionId = currentSessionId   // 调用时快照，防止异步期间切换会话
     if (!text || sending || stage !== 'idle') return
+
     function stageSet(next: Stage) {
       setStages(prev => ({ ...prev, [sessionId]: next }))
     }
     function sendingSet(v: boolean) {
       setSendingMap(prev => ({ ...prev, [sessionId]: v }))
     }
+    // 消息始终写入发出请求时的 sessionId，不受后续切换影响
+    function sessionAddMsg(role: 'user' | 'assistant', content: string) {
+      setMessagesMap(prev => ({
+        ...prev,
+        [sessionId]: [...(prev[sessionId] ?? []), { role, content }],
+      }))
+    }
+
     setInput('')
-    addMessage('user', text)
+    sessionAddMsg('user', text)
     sendingSet(true)
     stageSet('thinking')
 
@@ -190,31 +211,31 @@ export default function App() {
 
     try {
       const res = await sendChat(text, useKb, kbConvId, chatModel, visionModel, (chunk) => {
-        // 用户已切换到其他会话，停止向当前视图写入该会话的流式内容
-        if (currentSessionIdRef.current !== sessionId) return
         accumulated += chunk
         if (!gotFirstChunk) {
           gotFirstChunk = true
           stageSet('idle')
-          addMessage('assistant', accumulated)
+          sessionAddMsg('assistant', accumulated)
         } else {
-          setMessages(prev => {
-            const updated = [...prev]
+          setMessagesMap(prev => {
+            const sessionMsgs = prev[sessionId] ?? []
+            const updated = [...sessionMsgs]
             updated[updated.length - 1] = { role: 'assistant', content: accumulated }
-            return updated
+            return { ...prev, [sessionId]: updated }
           })
         }
       })
 
-      if (res.reply && currentSessionIdRef.current === sessionId) {
+      if (res.reply) {
         if (gotFirstChunk) {
-          setMessages(prev => {
-            const updated = [...prev]
+          setMessagesMap(prev => {
+            const sessionMsgs = prev[sessionId] ?? []
+            const updated = [...sessionMsgs]
             updated[updated.length - 1] = { role: 'assistant', content: res.reply }
-            return updated
+            return { ...prev, [sessionId]: updated }
           })
         } else {
-          addMessage('assistant', res.reply)
+          sessionAddMsg('assistant', res.reply)
         }
       }
 
@@ -222,13 +243,14 @@ export default function App() {
       stageSet(res.next_stage as Stage)
     } catch {
       if (gotFirstChunk) {
-        setMessages(prev => {
-          const updated = [...prev]
+        setMessagesMap(prev => {
+          const sessionMsgs = prev[sessionId] ?? []
+          const updated = [...sessionMsgs]
           updated[updated.length - 1] = { role: 'assistant', content: '❌ 请求失败，请检查后端服务是否启动。' }
-          return updated
+          return { ...prev, [sessionId]: updated }
         })
       } else {
-        addMessage('assistant', '❌ 请求失败，请检查后端服务是否启动。')
+        sessionAddMsg('assistant', '❌ 请求失败，请检查后端服务是否启动。')
       }
       stageSet('idle')
     } finally {
@@ -250,7 +272,7 @@ export default function App() {
 
   async function handleClearChat() {
     await clearHistory(currentSessionId)
-    setMessages([])
+    setMessagesMap(prev => ({ ...prev, [currentSessionId]: [] }))
     setKbConvId('')
   }
 
@@ -258,8 +280,12 @@ export default function App() {
     setCurrentSessionId(sessionId)
     setApiSessionId(sessionId)
     setKbConvId('')
-    const { messages: msgs } = await getHistory(sessionId)
-    setMessages(msgs ?? [])
+    // 若该会话消息已缓存在内存中，直接切换显示，无需重新请求后端
+    // 这样可保留会话切换期间收到的流式消息和 Flow 完成消息
+    if (!messagesMapRef.current[sessionId]) {
+      const { messages: msgs } = await getHistory(sessionId)
+      setMessagesMap(prev => ({ ...prev, [sessionId]: msgs ?? [] }))
+    }
   }
 
   async function handleNewSession() {
@@ -269,7 +295,11 @@ export default function App() {
       const { session_id } = await createSession()
       const list = await getSessions()
       setSessions(list)
-      await switchSession(session_id)
+      // 新会话消息为空，直接写入缓存并切换，无需请求后端历史
+      setMessagesMap(prev => ({ ...prev, [session_id]: [] }))
+      setCurrentSessionId(session_id)
+      setApiSessionId(session_id)
+      setKbConvId('')
     } finally {
       setCreatingSession(false)
     }
@@ -279,6 +309,12 @@ export default function App() {
     await deleteSession(sessionId)
     const list = await getSessions()
     setSessions(list)
+    // 清理已删除会话的内存缓存
+    setMessagesMap(prev => {
+      const next = { ...prev }
+      delete next[sessionId]
+      return next
+    })
     if (currentSessionId === sessionId) {
       if (list.length > 0) {
         await switchSession(list[0].id)
@@ -367,7 +403,8 @@ export default function App() {
           ))}
 
           {/* Flow 面板：所有会话的 Flow 同时挂载，当前会话可见，其余隐藏
-               这样切换会话时组件不会卸载，内部处理状态（上传进度、识别结果）完整保留 */}
+               这样切换会话时组件不会卸载，内部处理状态（上传进度、识别结果）完整保留
+               Flow 完成/取消消息直接写入对应会话的 messagesMap，切回后即可看到 */}
           {Object.entries(stages).map(([sid, sStage]) => {
             const FlowComp = FLOW_COMPONENTS[sStage]
             if (!FlowComp) return null
@@ -375,11 +412,17 @@ export default function App() {
               <div key={sid} className={sid === currentSessionId ? '' : 'hidden'}>
                 <FlowComp
                   onComplete={reply => {
-                    if (sid === currentSessionId) addMessage('assistant', reply)
+                    setMessagesMap(prev => ({
+                      ...prev,
+                      [sid]: [...(prev[sid] ?? []), { role: 'assistant' as const, content: reply }],
+                    }))
                     setStages(prev => ({ ...prev, [sid]: 'idle' }))
                   }}
                   onCancel={() => {
-                    if (sid === currentSessionId) addMessage('assistant', '已取消，如需重新操作请告诉我。')
+                    setMessagesMap(prev => ({
+                      ...prev,
+                      [sid]: [...(prev[sid] ?? []), { role: 'assistant' as const, content: '已取消，如需重新操作请告诉我。' }],
+                    }))
                     setStages(prev => ({ ...prev, [sid]: 'idle' }))
                   }}
                   visionModel={visionModel}

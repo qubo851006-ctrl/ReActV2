@@ -2,6 +2,13 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.8',
+    date: '2026-05-08',
+    changes: [
+      { type: 'feat', text: '消息状态改为按会话独立存储：Session A 正在流式回答时切换到 Session B，A 的回答继续在后台写入 A 自己的消息队列，切回后内容完整呈现；Flow（培训统计/案件台账等）在后台完成时，完成消息也正确归入触发该 Flow 的会话，而非当前活跃会话，实现真正的多会话并行互不干扰' },
+    ],
+  },
+  {
     version: 'v2.7',
     date: '2026-05-08',
     changes: [
