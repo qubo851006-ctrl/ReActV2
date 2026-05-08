@@ -97,7 +97,7 @@ export default function App() {
   const [chatModelOptions, setChatModelOptions] = useState<ModelOption[]>(CHAT_MODEL_OPTIONS)
   const [visionModelOptions, setVisionModelOptions] = useState<ModelOption[]>(VISION_MODEL_OPTIONS)
   const [kbConvId, setKbConvId] = useState('')
-  const [sending, setSending] = useState(false)
+  const [sendingMap, setSendingMap] = useState<Record<string, boolean>>({})
   const [versionOpen, setVersionOpen] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionMeta[]>([])
@@ -105,6 +105,7 @@ export default function App() {
   const currentSessionIdRef = useRef<string>('')
   currentSessionIdRef.current = currentSessionId
   const stage: Stage = stages[currentSessionId] ?? 'idle'
+  const sending = sendingMap[currentSessionId] ?? false
   const bottomRef = useRef<HTMLDivElement>(null)
 
   function setStage(next: Stage) {
@@ -175,9 +176,12 @@ export default function App() {
     function stageSet(next: Stage) {
       setStages(prev => ({ ...prev, [sessionId]: next }))
     }
+    function sendingSet(v: boolean) {
+      setSendingMap(prev => ({ ...prev, [sessionId]: v }))
+    }
     setInput('')
     addMessage('user', text)
-    setSending(true)
+    sendingSet(true)
     stageSet('thinking')
 
     let gotFirstChunk = false
@@ -225,7 +229,7 @@ export default function App() {
       }
       stageSet('idle')
     } finally {
-      setSending(false)
+      sendingSet(false)
     }
   }
 
