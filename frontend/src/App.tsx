@@ -236,11 +236,6 @@ export default function App() {
     setStage(nextStage)
   }
 
-  function handleCancel() {
-    addMessage('assistant', '已取消，如需重新操作请告诉我。')
-    setStage('idle')
-  }
-
   async function handleClearLedger() {
     const res = await clearLedger()
     addMessage('assistant', res.message)
@@ -287,7 +282,6 @@ export default function App() {
 
   const isIdle = stage === 'idle'
   const isDownloadStage = stage in DOWNLOAD_ACTIONS
-  const ActiveFlow = FLOW_COMPONENTS[stage]
   const activeDownload = DOWNLOAD_ACTIONS[stage]
 
   return (
@@ -358,14 +352,27 @@ export default function App() {
             <ChatMessage key={i} message={msg} />
           ))}
 
-          {/* Flow 面板：由 FLOW_COMPONENTS 表驱动，新增功能不改此处 */}
-          {ActiveFlow && (
-            <ActiveFlow
-              onComplete={reply => { addMessage('assistant', reply); setStage('idle') }}
-              onCancel={handleCancel}
-              visionModel={visionModel}
-            />
-          )}
+          {/* Flow 面板：所有会话的 Flow 同时挂载，当前会话可见，其余隐藏
+               这样切换会话时组件不会卸载，内部处理状态（上传进度、识别结果）完整保留 */}
+          {Object.entries(stages).map(([sid, sStage]) => {
+            const FlowComp = FLOW_COMPONENTS[sStage]
+            if (!FlowComp) return null
+            return (
+              <div key={sid} className={sid === currentSessionId ? '' : 'hidden'}>
+                <FlowComp
+                  onComplete={reply => {
+                    if (sid === currentSessionId) addMessage('assistant', reply)
+                    setStages(prev => ({ ...prev, [sid]: 'idle' }))
+                  }}
+                  onCancel={() => {
+                    if (sid === currentSessionId) addMessage('assistant', '已取消，如需重新操作请告诉我。')
+                    setStages(prev => ({ ...prev, [sid]: 'idle' }))
+                  }}
+                  visionModel={visionModel}
+                />
+              </div>
+            )
+          })}
 
           {/* 下载按钮：由 DOWNLOAD_ACTIONS 表驱动，新增下载不改此处 */}
           {activeDownload && (
