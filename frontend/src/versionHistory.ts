@@ -2,6 +2,13 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.9',
+    date: '2026-05-08',
+    changes: [
+      { type: 'fix', text: '聊天端点改为全异步（async def + AsyncOpenAI）：LLM 调用（意图分类、流式回答）均通过 await 非阻塞执行，事件循环在每个 token 之间都可响应其他会话的请求（新建会话、切换会话、发消息），彻底消除多会话并行时的阻塞和排队问题' },
+    ],
+  },
+  {
     version: 'v2.8',
     date: '2026-05-08',
     changes: [

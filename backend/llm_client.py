@@ -1,5 +1,5 @@
 import httpx
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 from config import AIRCHINA_API_KEY, AIRCHINA_BASE_URL, AI_HTTP_HOST_HEADER, AI_HTTP_VERIFY_SSL
 
 
@@ -23,6 +23,20 @@ def get_llm_client() -> OpenAI:
         api_key=AIRCHINA_API_KEY,
         base_url=AIRCHINA_BASE_URL,
         http_client=httpx.Client(
+            verify=AI_HTTP_VERIFY_SSL,
+            headers=build_ai_http_headers(),
+        ),
+    )
+
+
+def get_async_llm_client() -> AsyncOpenAI:
+    """返回异步 LLM 客户端（用于 async def 端点，不阻塞事件循环）。
+    调用方应负责关闭 http_client，建议用 async with httpx.AsyncClient() as hc 包裹后传入。
+    """
+    return AsyncOpenAI(
+        api_key=AIRCHINA_API_KEY,
+        base_url=AIRCHINA_BASE_URL,
+        http_client=httpx.AsyncClient(
             verify=AI_HTTP_VERIFY_SSL,
             headers=build_ai_http_headers(),
         ),

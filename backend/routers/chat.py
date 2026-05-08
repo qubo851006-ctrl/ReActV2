@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import time as _time
@@ -7,10 +8,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import httpx
+from openai import AsyncOpenAI
 
-from config import DATA_ROOT, ZHISHU_API_KEY, ZHISHU_BASE_URL, AI_HTTP_VERIFY_SSL
+from config import (
+    DATA_ROOT, ZHISHU_API_KEY, ZHISHU_BASE_URL, AI_HTTP_VERIFY_SSL,
+    AIRCHINA_API_KEY, AIRCHINA_BASE_URL,
+)
 from file_store import atomic_write_text, file_lock, safe_child_path
-from llm_client import format_llm_error, get_llm_client
+from llm_client import format_llm_error, build_ai_http_headers
 from model_routes import resolve_chat_model, resolve_intent_model, resolve_vision_model
 from auth_utils import get_current_user
 from models import User
@@ -34,7 +39,7 @@ _VALID_INTENTS = {
     "other",
 }
 
-# 工作流意图描述（供 _classify 使用，不含 query_company / other）
+# 工作流意图描述（供 _classify_async 使用，不含 query_company / other）
 _INTENT_DESCRIPTIONS_WORKFLOW = """\
 - download_training_excel：用户想下载或导出培训统计表、培训台账、培训记录 Excel
 - download_ledger_excel：用户想下载或导出案件台账、诉讼台账 Excel
@@ -94,7 +99,7 @@ def _is_model_status_question(message: str) -> bool:
     )
 
 
-# ── LLM 调用函数 ─────────────────────────────────────────────────
+# ── 异步 LLM 调用函数 ─────────────────────────────────────────────
 
 def _resolve_chat_model(requested: str | None, allowed_models: list[str] | None = None, default_model: str | None = None) -> str:
     if allowed_models is not None and default_model is not None:
@@ -107,14 +112,10 @@ def _resolve_chat_model(requested: str | None, allowed_models: list[str] | None 
     return resolve_chat_model(requested)
 
 
-def _classify(client, message: str) -> dict:
+async def _classify_async(client: AsyncOpenAI, message: str) -> dict:
     """
-    【优化2+3】单次 LLM 调用，同时完成意图识别、公司名提取、next_stage 判断。
-
-    返回格式：
-      {"intent": "waiting_files"}                           # 工作流意图
-      {"intent": "query_company", "company": "比亚迪"}      # 企业查询（含公司名）
-      {"intent": "other", "next_stage": null}              # 普通对话
+    异步意图分类（不阻塞事件循环）。
+    单次 LLM 调用同时完成意图识别、公司名提取、next_stage 判断。
     """
     system_prompt = f"""你是法务合规部的智能助手意图分析器。只返回 JSON，不要其他内容。
 
@@ -128,7 +129,7 @@ def _classify(client, message: str) -> dict:
 next_stage 可选值（仅当用户有明确操作需求时填入，否则填 null）：
 waiting_files / waiting_ledger_files / waiting_auth_file / waiting_ledger_merge_files / waiting_audit_file"""
 
-    resp = client.chat.completions.create(
+    resp = await client.chat.completions.create(
         model=resolve_intent_model(),
         messages=[
             {"role": "system", "content": system_prompt},
@@ -154,10 +155,9 @@ waiting_files / waiting_ledger_files / waiting_auth_file / waiting_ledger_merge_
         return {"intent": "other", "company": None, "next_stage": None}
 
 
-def _stream_reply(client, message: str, history: list, model: str):
+async def _stream_reply_async(client: AsyncOpenAI, message: str, history: list, model: str):
     """
-    【优化1】生成器：逐 token yield 文本块，供 SSE 流式推送。
-    替代原来的 _general_chat（不再要求 JSON 格式输出）。
+    异步流式回复生成器（不阻塞事件循环）。
     """
     system_prompt = f"""你是法务合规部的智能助手，请用中文简洁友好地回答用户问题。
 
@@ -171,13 +171,13 @@ def _stream_reply(client, message: str, history: list, model: str):
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": message})
 
-    stream = client.chat.completions.create(
+    stream = await client.chat.completions.create(
         model=model,
         messages=messages,
         stream=True,
         max_tokens=500,
     )
-    for chunk in stream:
+    async for chunk in stream:
         delta = _chunk_delta_content(chunk)
         if delta:
             yield delta
@@ -396,104 +396,123 @@ INTENT_RESPONSES = {
 
 
 @router.post("")
-def chat(req: ChatRequest, user: User = Depends(get_current_user)):
+async def chat(req: ChatRequest, user: User = Depends(get_current_user)):
+    """
+    聊天主端点（异步）。
+    使用 AsyncOpenAI 和 async for，LLM 调用完全非阻塞，
+    事件循环可在两个 token 之间处理其他会话的请求（新建会话、切换会话等）。
+    """
     uid = user.id
     sid = req.session_id
     selected_model = _resolve_chat_model(req.model)
     selected_vision_model = resolve_vision_model(req.vision_model)
-    def generate():
-        history = load_history(uid, sid)
 
+    async def generate():
+        # 文件 I/O 也卸载到线程，保持事件循环畅通
+        history = await asyncio.to_thread(load_history, uid, sid)
+
+        # ── 模型状态查询（直接返回，无需 LLM）─────────────────────
         if _is_model_status_question(req.message):
             reply = f"当前文字模型：{selected_model}\n当前图像模型：{selected_vision_model}"
-            _append_and_save(history, req.message, reply, uid, sid)
+            await asyncio.to_thread(_append_and_save, history, req.message, reply, uid, sid)
             yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
             return
 
-        # ── 知识库模式（外部服务，无法流式）────────────────────────
+        # ── 知识库模式（异步 HTTP，不再阻塞）──────────────────────
         if req.use_kb:
             try:
-                url = f"{ZHISHU_BASE_URL}/chat-messages"
-                headers = {
-                    "Authorization": f"Bearer {ZHISHU_API_KEY}",
-                    "Content-Type": "application/json",
-                }
-                payload = {
-                    "query": req.message,
-                    "inputs": {},
-                    "response_mode": "blocking",
-                    "user": "training-manager",
-                    "conversation_id": req.kb_conversation_id,
-                }
-                resp = httpx.post(url, json=payload, headers=headers, verify=AI_HTTP_VERIFY_SSL, timeout=120)
-                resp.raise_for_status()
-                data = resp.json()
-                reply = data.get("answer", "（知识库未返回内容）")
-                new_conv_id = data.get("conversation_id", "")
+                async with httpx.AsyncClient(verify=AI_HTTP_VERIFY_SSL, timeout=120) as hc:
+                    resp = await hc.post(
+                        f"{ZHISHU_BASE_URL}/chat-messages",
+                        json={
+                            "query": req.message,
+                            "inputs": {},
+                            "response_mode": "blocking",
+                            "user": "training-manager",
+                            "conversation_id": req.kb_conversation_id,
+                        },
+                        headers={
+                            "Authorization": f"Bearer {ZHISHU_API_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    reply = data.get("answer", "（知识库未返回内容）")
+                    new_conv_id = data.get("conversation_id", "")
             except Exception as e:
                 reply = f"❌ 知识库查询失败：{e}"
                 new_conv_id = ""
-            _append_and_save(history, req.message, reply, uid, sid)
+            await asyncio.to_thread(_append_and_save, history, req.message, reply, uid, sid)
             yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": new_conv_id})
             return
 
-        client = get_llm_client()
+        # ── 异步 LLM 客户端（整个生命周期由 async with 管理）──────
+        async with httpx.AsyncClient(
+            verify=AI_HTTP_VERIFY_SSL,
+            headers=build_ai_http_headers(),
+        ) as http_client:
+            client = AsyncOpenAI(
+                api_key=AIRCHINA_API_KEY,
+                base_url=AIRCHINA_BASE_URL,
+                http_client=http_client,
+            )
 
-        # ── 单次分类调用（优化2+3）───────────────────────────────────
-        try:
-            cls = _classify(client, req.message)
-        except Exception as e:
-            reply = format_llm_error(e)
-            _append_and_save(history, req.message, reply, uid, sid)
-            yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
-            return
-        intent = cls["intent"]
-
-        # ── 固定回复意图（无需额外 LLM）─────────────────────────────
-        if intent in INTENT_RESPONSES:
-            reply, next_stage = INTENT_RESPONSES[intent]
-            _append_and_save(history, req.message, reply, uid, sid)
-            yield _sse({"type": "done", "reply": reply, "next_stage": next_stage, "kb_conversation_id": ""})
-            return
-
-        # ── 企业查询（MCP，无法流式）────────────────────────────────
-        if intent == "query_company":
-            company = cls.get("company") or req.message
+            # ── 意图分类（异步，不占线程池）──────────────────────
             try:
-                from utils.mcp_client import query_company, format_company_markdown
-                result = query_company(company)
-                reply = format_company_markdown(result)
-            except ValueError as e:
-                reply = f"❌ 未找到匹配企业：{e}"
+                cls = await _classify_async(client, req.message)
             except Exception as e:
-                reply = f"❌ 企业信息查询失败：{e}"
-            _append_and_save(history, req.message, reply, uid, sid)
-            yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
-            return
+                reply = format_llm_error(e)
+                await asyncio.to_thread(_append_and_save, history, req.message, reply, uid, sid)
+                yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
+                return
+            intent = cls["intent"]
 
-        # ── 通用对话（流式输出，优化1）──────────────────────────────
-        next_stage = cls.get("next_stage") or "idle"
-        if next_stage not in _ACTIONABLE_STAGES:
-            next_stage = "idle"
+            # ── 固定回复意图 ──────────────────────────────────────
+            if intent in INTENT_RESPONSES:
+                reply, next_stage = INTENT_RESPONSES[intent]
+                await asyncio.to_thread(_append_and_save, history, req.message, reply, uid, sid)
+                yield _sse({"type": "done", "reply": reply, "next_stage": next_stage, "kb_conversation_id": ""})
+                return
 
-        accumulated = ""
-        try:
-            for chunk in _stream_reply(client, req.message, history, selected_model):
-                accumulated += chunk
-                yield _sse({"type": "chunk", "text": chunk})
-        except Exception as e:
-            reply = format_llm_error(e)
-            if accumulated:
-                accumulated = f"{accumulated}\n\n{reply}"
-                yield _sse({"type": "chunk", "text": f"\n\n{reply}"})
-                reply = ""
-            else:
-                accumulated = reply
-            _append_and_save(history, req.message, accumulated, uid, sid)
-            yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
-            return
+            # ── 企业查询（同步库，卸载到线程）───────────────────
+            if intent == "query_company":
+                company = cls.get("company") or req.message
+                try:
+                    from utils.mcp_client import query_company, format_company_markdown
+                    result = await asyncio.to_thread(query_company, company)
+                    reply = format_company_markdown(result)
+                except ValueError as e:
+                    reply = f"❌ 未找到匹配企业：{e}"
+                except Exception as e:
+                    reply = f"❌ 企业信息查询失败：{e}"
+                await asyncio.to_thread(_append_and_save, history, req.message, reply, uid, sid)
+                yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
+                return
 
-        _append_and_save(history, req.message, accumulated, uid, sid)
-        yield _sse({"type": "done", "reply": "", "next_stage": next_stage, "kb_conversation_id": ""})
+            # ── 通用对话（异步流式，每个 token await 后事件循环可响应其他请求）
+            next_stage = cls.get("next_stage") or "idle"
+            if next_stage not in _ACTIONABLE_STAGES:
+                next_stage = "idle"
+
+            accumulated = ""
+            try:
+                async for chunk in _stream_reply_async(client, req.message, history, selected_model):
+                    accumulated += chunk
+                    yield _sse({"type": "chunk", "text": chunk})
+            except Exception as e:
+                reply = format_llm_error(e)
+                if accumulated:
+                    accumulated = f"{accumulated}\n\n{reply}"
+                    yield _sse({"type": "chunk", "text": f"\n\n{reply}"})
+                    reply = ""
+                else:
+                    accumulated = reply
+                await asyncio.to_thread(_append_and_save, history, req.message, accumulated, uid, sid)
+                yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
+                return
+
+            await asyncio.to_thread(_append_and_save, history, req.message, accumulated, uid, sid)
+            yield _sse({"type": "done", "reply": "", "next_stage": next_stage, "kb_conversation_id": ""})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
