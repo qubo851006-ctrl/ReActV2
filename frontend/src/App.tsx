@@ -83,7 +83,7 @@ const SKILL_TRIGGERS: Record<SkillKey, { msg: string; reply: string; stage: Stag
 
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
-  const [stage, setStage] = useState<Stage>('idle')
+  const [stages, setStages] = useState<Record<string, Stage>>({})
   const [input, setInput] = useState('')
   const [useKb, setUseKb] = useState(false)
   const [chatModel, setChatModel] = useState<ChatModel>(() => {
@@ -102,7 +102,15 @@ export default function App() {
   const [adminOpen, setAdminOpen] = useState(false)
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string>('')
+  const currentSessionIdRef = useRef<string>('')
+  currentSessionIdRef.current = currentSessionId
+  const stage: Stage = stages[currentSessionId] ?? 'idle'
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  function setStage(next: Stage) {
+    const id = currentSessionIdRef.current
+    setStages(prev => ({ ...prev, [id]: next }))
+  }
 
   useEffect(() => {
     async function init() {
@@ -162,11 +170,15 @@ export default function App() {
 
   async function handleSend() {
     const text = input.trim()
+    const sessionId = currentSessionId
     if (!text || sending || stage !== 'idle') return
+    function stageSet(next: Stage) {
+      setStages(prev => ({ ...prev, [sessionId]: next }))
+    }
     setInput('')
     addMessage('user', text)
     setSending(true)
-    setStage('thinking')
+    stageSet('thinking')
 
     let gotFirstChunk = false
     let accumulated = ''
@@ -176,7 +188,7 @@ export default function App() {
         accumulated += chunk
         if (!gotFirstChunk) {
           gotFirstChunk = true
-          setStage('idle')
+          stageSet('idle')
           addMessage('assistant', accumulated)
         } else {
           setMessages(prev => {
@@ -200,7 +212,7 @@ export default function App() {
       }
 
       if (res.kb_conversation_id) setKbConvId(res.kb_conversation_id)
-      setStage(res.next_stage as Stage)
+      stageSet(res.next_stage as Stage)
     } catch {
       if (gotFirstChunk) {
         setMessages(prev => {
@@ -211,7 +223,7 @@ export default function App() {
       } else {
         addMessage('assistant', '❌ 请求失败，请检查后端服务是否启动。')
       }
-      setStage('idle')
+      stageSet('idle')
     } finally {
       setSending(false)
     }
@@ -243,7 +255,6 @@ export default function App() {
   async function switchSession(sessionId: string) {
     setCurrentSessionId(sessionId)
     setApiSessionId(sessionId)
-    setStage('idle')
     setKbConvId('')
     const { messages: msgs } = await getHistory(sessionId)
     setMessages(msgs ?? [])

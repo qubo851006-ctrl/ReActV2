@@ -2,6 +2,13 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.7',
+    date: '2026-05-08',
+    changes: [
+      { type: 'feat', text: '多会话并行处理：在一个会话执行培训统计、案件台账等任务时，可自由切换到其他会话处理不同事务，切回后原任务状态完整保留' },
+    ],
+  },
+  {
     version: 'v2.6',
     date: '2026-05-08',
     changes: [
