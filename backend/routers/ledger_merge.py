@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -40,11 +41,14 @@ async def merge_excel(
         if finance_bytes is not None and finance_file:
             validate_excel_upload(finance_file.filename or "", finance_file.content_type, finance_bytes)
 
-        excel_bytes, stats = merge_ledgers(contract_bytes, purchase_bytes, finance_bytes)
+        def _merge_and_save() -> dict:
+            merged_bytes, s = merge_ledgers(contract_bytes, purchase_bytes, finance_bytes)
+            DATA_DIR.mkdir(exist_ok=True)
+            with file_lock(MERGED_FILE):
+                atomic_write_bytes(MERGED_FILE, merged_bytes)
+            return s
 
-        DATA_DIR.mkdir(exist_ok=True)
-        with file_lock(MERGED_FILE):
-            atomic_write_bytes(MERGED_FILE, excel_bytes)
+        stats = await asyncio.to_thread(_merge_and_save)
 
         write_log(db, user, "ledger_merge", f"合并三台账，合同条数：{stats.get('total_contract', 0)}", request)
         return {"ok": True, **stats}

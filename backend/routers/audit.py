@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import asyncio
 import io
 import json
 import re
@@ -208,7 +209,8 @@ async def analyze_audit(
         raise HTTPException(status_code=400, detail="Excel 中未找到有效数据行。")
 
     prompt = _build_prompt(rows, doms)
-    try:
+
+    def _call_llm() -> list:
         client = get_llm_client()
         resp = client.chat.completions.create(
             model=MODEL_CHAT,
@@ -216,7 +218,10 @@ async def analyze_audit(
             temperature=0,
         )
         llm_text = resp.choices[0].message.content or ""
-        classified_rows = _parse_llm_output(llm_text, rows)
+        return _parse_llm_output(llm_text, rows)
+
+    try:
+        classified_rows = await asyncio.to_thread(_call_llm)
     except ValueError as e:
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:

@@ -2,6 +2,17 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.10',
+    date: '2026-05-08',
+    changes: [
+      { type: 'fix', text: '修复所有 async def 端点中的事件循环阻塞问题（根本原因）：培训提取、案件台账提取、授权请示生成、审计分析均调用了同步 LLM/PDF/OCR 函数，直接运行于事件循环，在 Session A 处理期间（10~60 秒）完全阻塞了 Session B 的所有请求；现全部通过 asyncio.to_thread 卸载到线程池，事件循环始终保持畅通' },
+      { type: 'fix', text: '模型路由配置读取改为内存缓存（_get_cached_routes）：消除每次 chat 请求中 resolve_intent_model 等函数触发的 3 次同步磁盘读取，彻底杜绝 async 端点内的文件 I/O 阻塞' },
+      { type: 'fix', text: '聊天流式回复中每个 token 后增加 await asyncio.sleep(0)：主动让出事件循环，防止高频 token 流在 Starlette 缓冲未满时连续占用循环导致其他协程饿死' },
+      { type: 'fix', text: 'SQLite 启用 WAL 模式（journal_mode=WAL）并设置 busy_timeout=5000ms：允许多连接并发读写 auth.db，彻底消除 get_current_user 并发 db.commit() 时的 SQLITE_BUSY 错误' },
+      { type: 'fix', text: '聊天 StreamingResponse 增加 Cache-Control: no-cache、X-Accel-Buffering: no 响应头，防止代理层缓冲 SSE 数据' },
+    ],
+  },
+  {
     version: 'v2.9',
     date: '2026-05-08',
     changes: [

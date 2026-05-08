@@ -15,6 +15,23 @@ from file_store import atomic_write_text, file_lock
 
 MODEL_ROUTES_PATH = Path(DATA_ROOT) / "model_routes.json"
 
+# ── 内存缓存（避免在 async 端点中重复同步读文件阻塞事件循环）──────
+_routes_cache: dict[str, Any] | None = None
+
+
+def _get_cached_routes() -> dict[str, Any]:
+    """返回内存中缓存的路由配置，首次调用时从磁盘加载。"""
+    global _routes_cache
+    if _routes_cache is None:
+        _routes_cache = load_model_routes()
+    return _routes_cache
+
+
+def _invalidate_routes_cache() -> None:
+    """写入新配置后调用，使下次 _get_cached_routes() 重新读盘。"""
+    global _routes_cache
+    _routes_cache = None
+
 
 def _label_for_model(value: str) -> str:
     labels = {
@@ -102,6 +119,7 @@ def save_model_routes(payload: dict[str, Any], path: Path = MODEL_ROUTES_PATH) -
     }
     with file_lock(path):
         atomic_write_text(path, json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+    _invalidate_routes_cache()
     return saved
 
 
@@ -111,15 +129,15 @@ def ensure_model_routes_file(path: Path = MODEL_ROUTES_PATH) -> None:
 
 
 def resolve_chat_model(requested: str | None) -> str:
-    routes = load_model_routes()
+    routes = _get_cached_routes()
     return resolve_model(requested, routes["chat_models"], routes["default_chat_model"])
 
 
 def resolve_intent_model() -> str:
-    routes = load_model_routes()
+    routes = _get_cached_routes()
     return resolve_model(routes["default_intent_model"], routes["chat_models"], routes["default_chat_model"])
 
 
 def resolve_vision_model(requested: str | None) -> str:
-    routes = load_model_routes()
+    routes = _get_cached_routes()
     return resolve_model(requested, routes["vision_models"], routes["default_vision_model"])

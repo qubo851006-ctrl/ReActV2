@@ -1,3 +1,4 @@
+import asyncio
 import os
 import io
 import base64
@@ -44,72 +45,91 @@ async def process_auth_request(
     except UploadValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # 提取文字
-    pdf_text = ""
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
-            t = page.extract_text()
-            if t:
-                pdf_text += t + "\n"
-    pdf_text = pdf_text.strip()
+    def _run_blocking() -> dict:
+        """
+        所有阻塞操作（PDF 解析、OCR、多次 LLM 调用、文件写入）统一在此函数中运行，
+        通过 asyncio.to_thread 卸载到线程池，不阻塞事件循环。
+        """
+        nonlocal pdf_bytes, session_id, vision_model
 
-    if not pdf_text:
-        pdf_text = ocr_pdf_with_vision(pdf_bytes, model=vision_model)
+        # 提取文字
+        pdf_text = ""
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                t = page.extract_text()
+                if t:
+                    pdf_text += t + "\n"
+        pdf_text = pdf_text.strip()
+        if not pdf_text:
+            pdf_text = ocr_pdf_with_vision(pdf_bytes, model=vision_model)
 
-    # AI 提取字段
-    info = extract_approval_info(pdf_text)
+        # AI 提取字段 + 生成文档
+        info = extract_approval_info(pdf_text)
+        auth_content = draft_auth_request(info)
+        letter_content = draft_auth_letter(info)
 
-    # 生成授权请示内容
-    auth_content = draft_auth_request(info)
+        # 生成授权请示 Word
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False, prefix="授权请示_") as tmp:
+            docx_path = tmp.name
+        save_as_docx(auth_content, docx_path)
+        with open(docx_path, "rb") as f:
+            docx_b64 = base64.b64encode(f.read()).decode()
+        os.unlink(docx_path)
 
-    # 生成授权请示 Word
-    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False, prefix="授权请示_") as tmp:
-        docx_path = tmp.name
-    save_as_docx(auth_content, docx_path)
-    with open(docx_path, "rb") as f:
-        docx_b64 = base64.b64encode(f.read()).decode()
-    os.unlink(docx_path)
+        # 生成授权书 Word
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False, prefix="授权书_") as tmp:
+            letter_path = tmp.name
+        save_auth_letter_as_docx(letter_content, letter_path)
+        with open(letter_path, "rb") as f:
+            letter_b64 = base64.b64encode(f.read()).decode()
+        os.unlink(letter_path)
 
-    # 生成授权书内容
-    letter_content = draft_auth_letter(info)
+        project_name = info.get("项目名称") or "授权请示"
+        title = "关于{}相关工作授权的请示".format(
+            project_name[:15] if len(project_name) > 15 else project_name
+        )
 
-    # 生成授权书 Word
-    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False, prefix="授权书_") as tmp:
-        letter_path = tmp.name
-    save_auth_letter_as_docx(letter_content, letter_path)
-    with open(letter_path, "rb") as f:
-        letter_b64 = base64.b64encode(f.read()).decode()
-    os.unlink(letter_path)
+        # 记录台账
+        ledger_updated = record_to_ledger(info, title, AUTH_LEDGER_PATH)
+        ledger_b64 = None
+        ledger_filename = None
+        if ledger_updated:
+            with open(AUTH_LEDGER_PATH, "rb") as f:
+                ledger_b64 = base64.b64encode(f.read()).decode()
+            ledger_filename = os.path.basename(AUTH_LEDGER_PATH)
 
-    project_name = info.get("项目名称") or "授权请示"
-    title = "关于{}相关工作授权的请示".format(
-        project_name[:15] if len(project_name) > 15 else project_name
-    )
+        return {
+            "info": info,
+            "auth_content": auth_content,
+            "letter_content": letter_content,
+            "docx_b64": docx_b64,
+            "letter_b64": letter_b64,
+            "project_name": project_name,
+            "ledger_updated": ledger_updated,
+            "ledger_b64": ledger_b64,
+            "ledger_filename": ledger_filename,
+        }
 
-    # 记录台账（自动创建文件，路径由 config.AUTH_LEDGER_PATH 决定）
-    ledger_updated = record_to_ledger(info, title, AUTH_LEDGER_PATH)
-    ledger_b64 = None
-    ledger_filename = None
-    if ledger_updated:
-        with open(AUTH_LEDGER_PATH, "rb") as f:
-            ledger_b64 = base64.b64encode(f.read()).decode()
-        ledger_filename = os.path.basename(AUTH_LEDGER_PATH)
+    result = await asyncio.to_thread(_run_blocking)
+    info = result["info"]
+    auth_content = result["auth_content"]
+    project_name = result["project_name"]
 
     write_log(db, user, "auth_request_process", f"生成授权请示：{project_name}", request)
     reply = "✅ 授权请示及授权书已生成！\n\n---\n\n{}".format(auth_content)
-    history = load_history(user.id, session_id)
+    history = await asyncio.to_thread(load_history, user.id, session_id)
     history.append({"role": "assistant", "content": reply})
-    save_history(history, user.id, session_id)
+    await asyncio.to_thread(save_history, history, user.id, session_id)
 
     return {
         "content": auth_content,
-        "docx_base64": docx_b64,
+        "docx_base64": result["docx_b64"],
         "filename": "授权请示_{}.docx".format(project_name[:20]),
-        "letter_content": letter_content,
-        "letter_base64": letter_b64,
+        "letter_content": result["letter_content"],
+        "letter_base64": result["letter_b64"],
         "letter_filename": "授权书_{}.docx".format(project_name[:20]),
-        "ledger_updated": ledger_updated,
-        "ledger_base64": ledger_b64,
-        "ledger_filename": ledger_filename,
+        "ledger_updated": result["ledger_updated"],
+        "ledger_base64": result["ledger_b64"],
+        "ledger_filename": result["ledger_filename"],
         "info": info,
     }

@@ -1,14 +1,22 @@
 from pathlib import Path
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 _DATA_DIR = Path(__file__).parent.parent / "data"
 _DATA_DIR.mkdir(exist_ok=True)
 
+
+def _configure_sqlite(dbapi_conn, _connection_record):
+    """启用 WAL 模式 + 5 秒忙等待：允许多连接并发读写，避免 SQLITE_BUSY 阻塞。"""
+    dbapi_conn.execute("PRAGMA journal_mode=WAL")
+    dbapi_conn.execute("PRAGMA busy_timeout=5000")
+
+
 engine = create_engine(
     f"sqlite:///{_DATA_DIR / 'auth.db'}",
     connect_args={"check_same_thread": False},
 )
+event.listen(engine, "connect", _configure_sqlite)
 SessionLocal = sessionmaker(bind=engine)
 
 

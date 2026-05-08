@@ -13,6 +13,14 @@
 - 用户登录、角色权限、操作审计和多会话历史。
 - 模型切换：右上角可手工选择文字模型和图像模型；模型列表与默认模型由运行时路由配置控制。
 
+## 2026-05-08 更新（五）
+
+- **根本原因修复**：培训提取、案件台账提取、授权请示生成、审计分析四个 `async def` 端点内的同步 LLM/PDF/OCR 调用（耗时 10~60 秒）直接运行于事件循环，导致 Session A 处理期间 Session B 的所有请求完全阻塞。现全部通过 `asyncio.to_thread` 卸载到线程池，事件循环始终畅通。
+- 模型路由配置改为内存缓存，消除 `async` 端点中每次请求触发的 3 次同步磁盘读取。
+- 聊天流式回复每个 token 后增加 `await asyncio.sleep(0)`，防止高频 token 流饿死其他协程。
+- SQLite 启用 WAL 模式 + `busy_timeout=5000ms`，消除并发 `db.commit()` 引发的 `SQLITE_BUSY` 错误。
+- 聊天 SSE 响应增加 `Cache-Control: no-cache` / `X-Accel-Buffering: no` 头，防止代理层缓冲。
+
 ## 2026-05-08 更新（四）
 
 - 聊天端点改为全异步（`async def` + `AsyncOpenAI`）：LLM 调用（意图分类 `_classify_async`、流式回答 `_stream_reply_async`）均通过 `await` 非阻塞执行；文件 I/O 通过 `asyncio.to_thread` 卸载，事件循环在每个 token 之间均可响应其他请求，彻底解决多会话并行时的阻塞和排队问题。

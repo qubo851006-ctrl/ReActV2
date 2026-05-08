@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
@@ -15,18 +16,16 @@ from upload_validation import UploadValidationError, validate_image_upload, vali
 router = APIRouter(prefix="/api/training", tags=["training"])
 
 
-# ── 提取（不写入台账）────────────────────────────────────────
-
-@router.post("/extract")
-async def extract_training(
-    notice_pdf: UploadFile = File(...),
-    signin_img: UploadFile = File(...),
-    department: str = Form(""),
-    vision_model: str = Form(""),
-):
+def _run_training_extraction(
+    notice_bytes: bytes,
+    signin_bytes: bytes,
+    notice_name: str,
+    signin_name: str,
+    vision_model: str,
+) -> dict:
     """
-    提取培训信息并归档文件，但不写入 Excel。
-    返回提取结果供前端展示确认。
+    同步耗时操作（PDF 解析 + 两次 LLM 调用）统一在此函数中完成，
+    由调用方通过 asyncio.to_thread 卸载到线程池，不阻塞事件循环。
     """
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -35,14 +34,6 @@ async def extract_training(
     from utils.classifier import classify_training
     from utils.archiver import archive_files
     from utils.excel_writer import EXCEL_PATH
-
-    notice_bytes = await notice_pdf.read()
-    signin_bytes = await signin_img.read()
-    try:
-        notice_name = validate_pdf_upload(notice_pdf.filename or "", notice_pdf.content_type, notice_bytes)
-        signin_name = validate_image_upload(signin_img.filename or "", signin_img.content_type, signin_bytes)
-    except UploadValidationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
     with tempfile.TemporaryDirectory() as tmpdir:
         notice_path = os.path.join(tmpdir, notice_name)
@@ -67,7 +58,6 @@ async def extract_training(
         "topic": sign_in_info["topic"] or "",
         "location": sign_in_info["location"] or "",
         "date": sign_in_info["date"] or "",
-        "department": department or "",
         "count": sign_in_info["count"],
         "category": category,
         "archive_path": archive_path,
@@ -75,6 +65,36 @@ async def extract_training(
         "confidence": sign_in_info.get("confidence", "high"),
         "reflection_note": sign_in_info.get("reflection_note", ""),
     }
+
+
+# ── 提取（不写入台账）────────────────────────────────────────
+
+@router.post("/extract")
+async def extract_training(
+    notice_pdf: UploadFile = File(...),
+    signin_img: UploadFile = File(...),
+    department: str = Form(""),
+    vision_model: str = Form(""),
+):
+    """
+    提取培训信息并归档文件，但不写入 Excel。
+    返回提取结果供前端展示确认。
+    耗时的 PDF 解析和 LLM 调用通过 asyncio.to_thread 卸载到线程池，不阻塞事件循环。
+    """
+    notice_bytes = await notice_pdf.read()
+    signin_bytes = await signin_img.read()
+    try:
+        notice_name = validate_pdf_upload(notice_pdf.filename or "", notice_pdf.content_type, notice_bytes)
+        signin_name = validate_image_upload(signin_img.filename or "", signin_img.content_type, signin_bytes)
+    except UploadValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    result = await asyncio.to_thread(
+        _run_training_extraction,
+        notice_bytes, signin_bytes, notice_name, signin_name, vision_model,
+    )
+
+    return {**result, "department": department or ""}
 
 
 # ── 确认写入台账 ──────────────────────────────────────────────

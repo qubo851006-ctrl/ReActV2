@@ -181,6 +181,7 @@ async def _stream_reply_async(client: AsyncOpenAI, message: str, history: list, 
         delta = _chunk_delta_content(chunk)
         if delta:
             yield delta
+            await asyncio.sleep(0)  # 主动让出事件循环，避免高频 token 流饿死其他协程
 
 
 # ── Session 存储（每用户独立目录，每 session 一个文件）─────────
@@ -515,4 +516,11 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)):
             await asyncio.to_thread(_append_and_save, history, req.message, accumulated, uid, sid)
             yield _sse({"type": "done", "reply": "", "next_stage": next_stage, "kb_conversation_id": ""})
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # 禁用 Nginx/代理层缓冲，确保 chunk 实时到达客户端
+        },
+    )

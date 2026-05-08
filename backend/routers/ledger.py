@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import shutil
@@ -50,33 +51,34 @@ async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str 
         def send(msg: str) -> str:
             return f"data: {json.dumps({'log': msg}, ensure_ascii=False)}\n\n"
 
-        # Step 1: 提取文字
+        # Step 1: 提取文字（阻塞 I/O + OCR 卸载到线程池）
         docs = []
         for fd in files_data:
             yield send(f"**Step 1** 📄 提取文字：`{fd['name']}`")
-            text = extract_file_text(fd["bytes"], fd["name"])
+            text = await asyncio.to_thread(extract_file_text, fd["bytes"], fd["name"])
             if not text:
                 yield send("→ 扫描件，启动视觉 OCR…")
                 try:
-                    text = ocr_pdf_with_vision(fd["bytes"], model=vision_model)
+                    text = await asyncio.to_thread(ocr_pdf_with_vision, fd["bytes"], vision_model)
                 except Exception as e:
+                    text = ""
                     yield send(f"⚠️ OCR 失败：{e}")
             yield send(f"→ 提取到 **{len(text)}** 字符")
-            doc_type = detect_doc_type_by_content(text) if text else "其他"
+            doc_type = await asyncio.to_thread(detect_doc_type_by_content, text) if text else "其他"
             yield send(f"→ 文书类型：**{doc_type}**")
             docs.append({"filename": fd["name"], "text": text, "doc_type": doc_type})
 
-        # Step 2: AI 提取字段
+        # Step 2: AI 提取字段（阻塞 LLM 调用卸载到线程池）
         yield send("**Step 2** 🤖 AI 抽取案件字段…")
-        new_case = extract_case_fields(docs, status_fn=lambda m: None)
+        new_case = await asyncio.to_thread(extract_case_fields, docs, lambda m: None)
         yield send(f"→ 案件名称：**{new_case.get('案件名称') or '（未提取到）'}**")
         yield send(f"→ 案由：**{new_case.get('案由') or '（未提取到）'}**")
         yield send(f"→ 标的金额：**{new_case.get('标的金额') or '（未提取到）'}**")
 
-        # Step 3: 比对台账
+        # Step 3: 比对台账（可能含 LLM 调用，卸载到线程池）
         yield send("**Step 3** 🔍 比对现有台账…")
-        existing_cases = load_cases_json()
-        match_idx = find_matching_case_idx(new_case, existing_cases, docs=docs)
+        existing_cases = await asyncio.to_thread(load_cases_json)
+        match_idx = await asyncio.to_thread(find_matching_case_idx, new_case, existing_cases, docs)
         yield send(f"→ {'匹配到第 ' + str(match_idx + 1) + ' 条记录' if match_idx is not None else '未匹配，将新增'}")
 
         # Step 4: 准备预览数据（合并但不保存）
@@ -94,9 +96,9 @@ async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str 
             action_text = f"新案件「{case_name}」，将新增至台账"
             is_new = True
 
-        # Step 5: 归档文书（归档不可逆，提前执行）
+        # Step 5: 归档文书（文件 I/O 卸载到线程池）
         yield send("📁 归档文书文件…")
-        archive_dir = archive_legal_docs(files_data, docs, case_name)
+        archive_dir = await asyncio.to_thread(archive_legal_docs, files_data, docs, case_name)
         yield send(f"→ 已归档至：`{archive_dir}`")
 
         yield send("✅ 提取完成，等待确认…")
