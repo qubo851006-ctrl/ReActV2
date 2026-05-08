@@ -2,6 +2,13 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.6',
+    date: '2026-05-08',
+    changes: [
+      { type: 'feat', text: '图像模型新增 Qwen3 VL 8B（本地）选项，支持通过本地 Ollama 服务进行图像分析，在 .env 中配置 OLLAMA_BASE_URL 后即可启用' },
+    ],
+  },
+  {
     version: 'v2.5',
     date: '2026-04-30',
     changes: [
