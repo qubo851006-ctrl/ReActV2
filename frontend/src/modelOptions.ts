@@ -22,6 +22,7 @@ export const CHAT_MODEL_OPTIONS: ModelOption[] = [
 
 export const VISION_MODEL_OPTIONS: ModelOption[] = [
   { value: 'qwen2.5-vl-72b', label: 'Qwen2.5 VL 72B', hint: '默认' },
+  { value: 'qwen3-vl:8b', label: 'Qwen3 VL 8B (本地)', hint: '本地' },
 ]
 
 export type ChatModel = string

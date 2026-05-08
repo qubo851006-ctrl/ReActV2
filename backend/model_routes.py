@@ -20,6 +20,7 @@ def _label_for_model(value: str) -> str:
     labels = {
         "qwen2.5-72b": "Qwen2.5 72B",
         "qwen2.5-vl-72b": "Qwen2.5 VL 72B",
+        "qwen3-vl:8b": "Qwen3 VL 8B (本地)",
         "DeepSeek-V3": "DeepSeek V3",
         "DeepSeek-R1": "DeepSeek R1",
         "glm-5-outside": "GLM-5",

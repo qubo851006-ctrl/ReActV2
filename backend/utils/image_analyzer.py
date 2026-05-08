@@ -4,9 +4,11 @@ import warnings
 import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
-from config import AI_HTTP_VERIFY_SSL
+from config import AI_HTTP_VERIFY_SSL, OLLAMA_BASE_URL, OLLAMA_API_KEY
 from llm_client import build_ai_http_headers
 from model_routes import resolve_vision_model
+
+_OLLAMA_MODELS = {"qwen3-vl:8b"}
 
 warnings.filterwarnings("ignore")  # 屏蔽内网 SSL 警告
 load_dotenv(override=True)
@@ -28,6 +30,20 @@ def get_client() -> OpenAI:
         base_url=os.getenv("AIRCHINA_BASE_URL"),
         http_client=httpx.Client(verify=AI_HTTP_VERIFY_SSL, headers=build_ai_http_headers()),
     )
+
+
+def get_ollama_client() -> OpenAI:
+    return OpenAI(
+        api_key=OLLAMA_API_KEY,
+        base_url=OLLAMA_BASE_URL,
+        http_client=httpx.Client(verify=False),
+    )
+
+
+def get_vision_client(model: str) -> OpenAI:
+    if model in _OLLAMA_MODELS and OLLAMA_BASE_URL:
+        return get_ollama_client()
+    return get_client()
 
 
 def _call_vision(client: OpenAI, image_url: str, prompt: str, model: str) -> str:
@@ -57,8 +73,8 @@ def count_attendees(image_path: str, model: str | None = None) -> dict:
       - confidence: "high" | "low"
       - reflection_note: 反思检查的说明文字
     """
-    client = get_client()
     selected_model = resolve_vision_model(model)
+    client = get_vision_client(selected_model)
 
     image_data = encode_image(image_path)
     ext = image_path.split(".")[-1].lower()
