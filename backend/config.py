@@ -7,8 +7,18 @@ except ModuleNotFoundError:
 
 load_dotenv(override=True)
 
-MODEL_CHAT   = os.getenv("MODEL_CHAT",   "qwen2.5-72b")
-MODEL_INTENT = os.getenv("MODEL_INTENT", "qwen2.5-72b")
+DISABLED_CHAT_MODELS = {"glm-5-outside"}
+
+
+def _safe_chat_model(value: str | None, default: str = "qwen2.5-72b") -> str:
+    normalized = (value or "").strip()
+    if not normalized or normalized in DISABLED_CHAT_MODELS:
+        return default
+    return normalized
+
+
+MODEL_CHAT   = _safe_chat_model(os.getenv("MODEL_CHAT"), "qwen2.5-72b")
+MODEL_INTENT = _safe_chat_model(os.getenv("MODEL_INTENT"), "qwen2.5-72b")
 MODEL_VISION = os.getenv("MODEL_VISION", "qwen2.5-vl-72b")
 
 
@@ -24,7 +34,7 @@ def resolve_model(requested: str | None, allowed_models: list[str], default_mode
 AI_CHAT_MODELS = [
     item.strip()
     for item in os.getenv("AI_CHAT_MODELS", "qwen2.5-72b,DeepSeek-V3").split(",")
-    if item.strip()
+    if item.strip() and item.strip() not in DISABLED_CHAT_MODELS
 ]
 if MODEL_CHAT and MODEL_CHAT not in AI_CHAT_MODELS:
     AI_CHAT_MODELS.insert(0, MODEL_CHAT)

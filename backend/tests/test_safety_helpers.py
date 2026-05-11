@@ -1,4 +1,6 @@
 import json
+import importlib
+import os
 import sys
 import tempfile
 import unittest
@@ -149,6 +151,30 @@ class LlmClientTests(unittest.TestCase):
             self.assertEqual(routes["default_chat_model"], "DeepSeek-V3")
             self.assertEqual(routes["chat_models"][0]["value"], "DeepSeek-V3")
             self.assertEqual(routes["chat_models"][0]["label"], "DeepSeek V3")
+
+    def test_config_disables_glm5_even_when_env_requests_it(self):
+        import config
+
+        previous_env = {
+            "MODEL_CHAT": os.environ.get("MODEL_CHAT"),
+            "MODEL_INTENT": os.environ.get("MODEL_INTENT"),
+            "AI_CHAT_MODELS": os.environ.get("AI_CHAT_MODELS"),
+        }
+        os.environ["MODEL_CHAT"] = "glm-5-outside"
+        os.environ["MODEL_INTENT"] = "glm-5-outside"
+        os.environ["AI_CHAT_MODELS"] = "qwen2.5-72b,DeepSeek-V3,glm-5-outside"
+        try:
+            reloaded = importlib.reload(config)
+            self.assertEqual(reloaded.MODEL_CHAT, "qwen2.5-72b")
+            self.assertEqual(reloaded.MODEL_INTENT, "qwen2.5-72b")
+            self.assertEqual(reloaded.AI_CHAT_MODELS, ["qwen2.5-72b", "DeepSeek-V3"])
+        finally:
+            for key, value in previous_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            importlib.reload(config)
 
     def test_host_header_is_optional(self):
         self.assertEqual(build_ai_http_headers("aiplus.airchina.com.cn:18080"), {"Host": "aiplus.airchina.com.cn:18080"})

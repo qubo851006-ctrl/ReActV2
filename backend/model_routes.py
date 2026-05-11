@@ -9,12 +9,12 @@ from config import (
     MODEL_CHAT,
     MODEL_INTENT,
     MODEL_VISION,
+    DISABLED_CHAT_MODELS,
     resolve_model,
 )
 from file_store import atomic_write_text, file_lock
 
 MODEL_ROUTES_PATH = Path(DATA_ROOT) / "model_routes.json"
-DISABLED_CHAT_MODELS = {"glm-5-outside"}
 
 # ── 内存缓存（避免在 async 端点中重复同步读文件阻塞事件循环）──────
 _routes_cache: dict[str, Any] | None = None
