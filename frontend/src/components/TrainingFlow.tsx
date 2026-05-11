@@ -88,7 +88,12 @@ export default function TrainingFlow({ onComplete, onCancel, visionModel = '' }:
 
     return (
       <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 my-3">
-        <div className="text-sm font-medium text-slate-200 mb-1">请确认以下识别结果，可直接修改后再写入台账：</div>
+        <div className="flex items-start justify-between gap-3 mb-1">
+          <div className="text-sm font-medium text-slate-200">请确认以下识别结果，可直接修改后再写入台账：</div>
+          <button onClick={downloadTrainingExcel} className="text-xs text-emerald-300 hover:text-emerald-200 whitespace-nowrap">
+            下载已有台账
+          </button>
+        </div>
         {extracted.reflection_note && (
           <div className="text-xs text-slate-400 bg-slate-700/50 rounded-lg px-3 py-2 mb-4">
             🔍 {extracted.reflection_note}
@@ -215,10 +220,15 @@ export default function TrainingFlow({ onComplete, onCancel, visionModel = '' }:
   if (step === 'dept') {
     return (
       <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 my-3">
-        <div className="text-sm text-slate-300 mb-4">
-          文件已收到：<span className="text-indigo-400">{noticePdf?.name}</span>、
-          <span className="text-indigo-400">{signinImg?.name}</span>
-          <br />请填写主办部门（可留空跳过）：
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="text-sm text-slate-300">
+            文件已收到：<span className="text-indigo-400">{noticePdf?.name}</span>、
+            <span className="text-indigo-400">{signinImg?.name}</span>
+            <br />请填写主办部门（可留空跳过）：
+          </div>
+          <button onClick={downloadTrainingExcel} className="text-xs text-emerald-300 hover:text-emerald-200 whitespace-nowrap">
+            下载已有台账
+          </button>
         </div>
         <div className="flex gap-2">
           <input
@@ -251,7 +261,12 @@ export default function TrainingFlow({ onComplete, onCancel, visionModel = '' }:
   // ── 上传文件 ────────────────────────────────────────────────
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 my-3">
-      <div className="text-sm font-medium text-slate-300 mb-4">请上传以下两个文件：</div>
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="text-sm font-medium text-slate-300">请上传以下两个文件：</div>
+        <button onClick={downloadTrainingExcel} className="text-xs text-emerald-300 hover:text-emerald-200 whitespace-nowrap">
+          下载已有台账
+        </button>
+      </div>
       {error && <div className="text-red-400 text-sm mb-3">❌ {error}</div>}
       <div className="grid grid-cols-2 gap-4 mb-4">
         <FileDropZone

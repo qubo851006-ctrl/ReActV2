@@ -110,7 +110,12 @@ export default function LedgerFlow({ onComplete, onCancel, visionModel = '' }: P
 
     return (
       <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 my-3">
-        <div className="text-sm font-medium text-slate-200 mb-1">请确认以下提取结果，可直接修改后写入台账：</div>
+        <div className="flex items-start justify-between gap-3 mb-1">
+          <div className="text-sm font-medium text-slate-200">请确认以下提取结果，可直接修改后写入台账：</div>
+          <button onClick={downloadLedgerExcel} className="text-xs text-emerald-300 hover:text-emerald-200 whitespace-nowrap">
+            下载已有台账
+          </button>
+        </div>
         <div className={`text-xs ${actionColor} mb-4`}>{actionIcon} {preview.action_text}</div>
         {error && <div className="text-red-400 text-sm mb-3">❌ {error}</div>}
 
@@ -234,7 +239,12 @@ export default function LedgerFlow({ onComplete, onCancel, visionModel = '' }: P
   // ── 上传文件 ────────────────────────────────────────────────
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 my-3">
-      <div className="text-sm font-medium text-slate-300 mb-3">请上传案件法律文书（PDF / DOCX / DOC，可多选）</div>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div className="text-sm font-medium text-slate-300">请上传案件法律文书（PDF / DOCX / DOC，可多选）</div>
+        <button onClick={downloadLedgerExcel} className="text-xs text-emerald-300 hover:text-emerald-200 whitespace-nowrap">
+          下载已有台账
+        </button>
+      </div>
       {error && <div className="text-red-400 text-sm mb-3">❌ {error}</div>}
 
       <div

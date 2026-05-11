@@ -130,15 +130,23 @@ export default function LedgerMergeFlow({ onComplete, onCancel }: Props) {
           <span className="text-lg">🔀</span>
           <span className="text-sm font-semibold text-white">三台账合并</span>
         </div>
-        {!stats && (
+        <div className="flex items-center gap-3">
           <button
-            onClick={onCancel}
-            disabled={processing}
-            className="text-xs text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-40"
+            onClick={downloadMergedExcel}
+            className="text-xs text-emerald-300 hover:text-emerald-200 whitespace-nowrap"
           >
-            取消
+            下载已有台账
           </button>
-        )}
+          {!stats && (
+            <button
+              onClick={onCancel}
+              disabled={processing}
+              className="text-xs text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-40"
+            >
+              取消
+            </button>
+          )}
+        </div>
       </div>
 
       <p className="text-xs text-slate-400">
