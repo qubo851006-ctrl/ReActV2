@@ -46,6 +46,9 @@ export interface TrainingResult {
   excel_path: string
   confidence: 'high' | 'low'
   reflection_note: string
+  start_time: string
+  end_time: string
+  duration_hours: number
 }
 
 export interface LedgerStage {

@@ -50,9 +50,13 @@ export default function TrainingFlow({ onComplete, onCancel, visionModel = '' }:
         count: edited.count,
         category: edited.category,
         archive_path: edited.archive_path,
+        start_time: edited.start_time,
+        end_time: edited.end_time,
+        duration_hours: edited.duration_hours,
       })
       setStep('done')
-      onComplete(`✅ 培训记录已写入台账！主题：${edited.topic}，参与人数：${edited.count} 人`)
+      const durationText = edited.duration_hours > 0 ? `，培训时长：${edited.duration_hours} 课时` : ''
+      onComplete(`✅ 培训记录已写入台账！主题：${edited.topic}，参与人数：${edited.count} 人${durationText}`)
     } catch (e: unknown) {
       setError(getErrorMessage(e, '写入失败'))
     } finally {
@@ -124,6 +128,35 @@ export default function TrainingFlow({ onComplete, onCancel, visionModel = '' }:
               {confidenceLabel}
             </div>
           </div>
+          {([
+            ['培训开始时间', 'start_time', 'text'],
+            ['培训结束时间', 'end_time', 'text'],
+          ] as [string, keyof TrainingResult, string][]).map(([label, key, type]) => (
+            <div key={key} className="flex items-center gap-3">
+              <span className="text-slate-400 text-sm w-20 flex-shrink-0">{label}</span>
+              <input
+                type={type}
+                placeholder="HH:MM"
+                value={String(edited[key] ?? '')}
+                onChange={e => setField(key, e.target.value)}
+                className="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white outline-none focus:border-indigo-500"
+              />
+            </div>
+          ))}
+          <div className="flex items-center gap-3">
+            <span className="text-slate-400 text-sm w-20 flex-shrink-0">培训时长</span>
+            <div className="flex items-center gap-2 flex-1">
+              <input
+                type="number"
+                min={0}
+                step={0.5}
+                value={edited.duration_hours}
+                onChange={e => setField('duration_hours', parseFloat(e.target.value) || 0)}
+                className="w-24 bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white outline-none focus:border-indigo-500"
+              />
+              <span className="text-slate-400 text-sm">课时（1课时=40分钟）</span>
+            </div>
+          </div>
         </div>
 
         <div className="flex gap-2">
@@ -158,6 +191,7 @@ export default function TrainingFlow({ onComplete, onCancel, visionModel = '' }:
               ['培训日期', edited.date],
               ['主办部门', edited.department || '未填写'],
               ['参与人数', `${edited.count} 人`],
+              ['培训时长', edited.duration_hours > 0 ? `${edited.duration_hours} 课时` : '未填写'],
               ['培训类别', edited.category],
             ] as [string, string][]).map(([k, v]) => (
               <tr key={k} className="border-b border-slate-700/50">

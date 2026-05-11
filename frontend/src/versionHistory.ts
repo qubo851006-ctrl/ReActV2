@@ -2,6 +2,15 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.12',
+    date: '2026-05-11',
+    changes: [
+      { type: 'feat', text: '培训统计新增培训时长（课时）：AI 自动从培训通知 PDF 中提取开始时间和结束时间，按"总分钟数 ÷ 40 = 课时"计算；多天培训支持天数×单日时长；课时精度保留 1 位小数' },
+      { type: 'feat', text: '培训确认页新增「培训开始时间」「培训结束时间」「培训时长（课时）」三个可编辑字段，识别不准时可手动修正后再写入' },
+      { type: 'feat', text: '培训统计表 Excel 新增「培训时长（课时）」列（位于参与人数之后），已有台账文件自动迁移表头，无需手动处理旧数据' },
+    ],
+  },
+  {
     version: 'v2.11',
     date: '2026-05-08',
     changes: [

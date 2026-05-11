@@ -1,6 +1,8 @@
 import asyncio
 import os
+import re
 import tempfile
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -14,6 +16,96 @@ from routers.chat import load_history, save_history
 from upload_validation import UploadValidationError, validate_image_upload, validate_pdf_upload
 
 router = APIRouter(prefix="/api/training", tags=["training"])
+
+
+def _calc_duration_hours(start: str, end: str, days: int) -> float:
+    """计算培训时长（课时），1课时=40分钟，支持多天培训。"""
+    try:
+        s = datetime.strptime(start.strip(), "%H:%M")
+        e = datetime.strptime(end.strip(), "%H:%M")
+        minutes_per_day = int((e - s).seconds / 60)
+        total_minutes = minutes_per_day * max(days, 1)
+        return round(total_minutes / 40, 1)
+    except Exception:
+        return 0.0
+
+
+def _extract_training_time(notice_text: str) -> dict:
+    """
+    用 LLM 从培训通知文字中提取开始时间、结束时间和天数。
+    返回: {start_time, end_time, days, duration_hours}
+    提取失败时返回空字符串和 0.0，前端可手动填写。
+    """
+    import warnings
+    import httpx
+    from dotenv import load_dotenv
+    from openai import OpenAI
+    from config import AI_HTTP_VERIFY_SSL
+    from llm_client import build_ai_http_headers
+
+    warnings.filterwarnings("ignore")
+    load_dotenv(override=True)
+
+    empty = {"start_time": "", "end_time": "", "days": 1, "duration_hours": 0.0}
+    if not notice_text.strip():
+        return empty
+
+    try:
+        client = OpenAI(
+            api_key=os.getenv("AIRCHINA_API_KEY"),
+            base_url=os.getenv("AIRCHINA_BASE_URL"),
+            http_client=httpx.Client(verify=AI_HTTP_VERIFY_SSL, headers=build_ai_http_headers()),
+        )
+        model = os.getenv("MODEL_CLASSIFY", "qwen2.5-72b")
+
+        prompt = f"""请从以下培训通知文字中提取培训时间信息。
+
+培训通知内容：
+{notice_text}
+
+请严格按照以下格式输出，不要有任何多余内容：
+开始时间：HH:MM
+结束时间：HH:MM
+天数：N
+
+说明：
+- 时间格式必须是24小时制 HH:MM，例如 09:00、14:30
+- 天数是整数，单天培训填1
+- 如果通知中没有明确的时间信息，全部填写为空：开始时间：、结束时间：、天数：1
+"""
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.choices[0].message.content.strip()
+
+        start_match = re.search(r"开始时间[：:]\s*(\d{1,2}:\d{2})", text)
+        end_match = re.search(r"结束时间[：:]\s*(\d{1,2}:\d{2})", text)
+        days_match = re.search(r"天数[：:]\s*(\d+)", text)
+
+        start_time = start_match.group(1) if start_match else ""
+        end_time = end_match.group(1) if end_match else ""
+        days = int(days_match.group(1)) if days_match else 1
+
+        # 补零对齐 HH:MM
+        if start_time and ":" in start_time:
+            h, m = start_time.split(":")
+            start_time = f"{int(h):02d}:{m}"
+        if end_time and ":" in end_time:
+            h, m = end_time.split(":")
+            end_time = f"{int(h):02d}:{m}"
+
+        duration_hours = _calc_duration_hours(start_time, end_time, days) if start_time and end_time else 0.0
+
+        return {
+            "start_time": start_time,
+            "end_time": end_time,
+            "days": days,
+            "duration_hours": duration_hours,
+        }
+    except Exception:
+        return empty
 
 
 def _run_training_extraction(
@@ -46,6 +138,7 @@ def _run_training_extraction(
         notice_text = extract_pdf_text(notice_path)
         sign_in_info = count_attendees(signin_path, model=vision_model)
         category = classify_training(notice_text, sign_in_info["topic"])
+        time_info = _extract_training_time(notice_text)
         archive_path = archive_files(
             notice_path=notice_path,
             sign_in_path=signin_path,
@@ -60,6 +153,9 @@ def _run_training_extraction(
         "date": sign_in_info["date"] or "",
         "count": sign_in_info["count"],
         "category": category,
+        "start_time": time_info["start_time"],
+        "end_time": time_info["end_time"],
+        "duration_hours": time_info["duration_hours"],
         "archive_path": archive_path,
         "excel_path": EXCEL_PATH,
         "confidence": sign_in_info.get("confidence", "high"),
@@ -107,6 +203,9 @@ class TrainingWriteRequest(BaseModel):
     count: int
     category: str
     archive_path: str
+    start_time: str = ""
+    end_time: str = ""
+    duration_hours: float = 0.0
     session_id: str = ""
 
 
@@ -128,11 +227,12 @@ def write_training(
         location=req.location,
         department=req.department,
         count=req.count,
+        duration_hours=req.duration_hours,
         category=req.category,
         archive_path=req.archive_path,
     )
 
-    confidence_badge = "🟢 高置信度"  # 用户已确认，视为高置信
+    duration_display = f"{req.duration_hours} 课时" if req.duration_hours > 0 else "未填写"
     reply = (
         f"✅ 培训记录已写入台账！\n\n"
         f"| 字段 | 内容 |\n|------|------|\n"
@@ -141,6 +241,7 @@ def write_training(
         f"| 培训日期 | {req.date} |\n"
         f"| 主办部门 | {req.department or '未填写'} |\n"
         f"| 参与人数 | **{req.count} 人** |\n"
+        f"| 培训时长 | {duration_display} |\n"
         f"| 培训类别 | {req.category} |\n"
         f"| 归档路径 | `{req.archive_path}` |"
     )
