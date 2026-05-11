@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 _VALID_INTENTS = {
     "download_training_excel",
     "download_ledger_excel",
+    "download_compliance_excel",
     "waiting_files",
     "waiting_ledger_files",
     "waiting_auth_file",
@@ -42,6 +43,7 @@ _VALID_INTENTS = {
 
 # 工作流意图描述（供 _classify_async 使用，不含 query_company / other）
 _INTENT_DESCRIPTIONS_WORKFLOW = """\
+- download_compliance_excel：用户想下载或导出合规审查工作台账 Excel
 - download_training_excel：用户想下载或导出培训统计表、培训台账、培训记录 Excel
 - download_ledger_excel：用户想下载或导出案件台账、诉讼台账 Excel
 - waiting_files：用户想统计培训签到、归档培训文件、新增培训记录（需上传文件，不是单纯下载）
@@ -377,6 +379,10 @@ INTENT_RESPONSES = {
     "download_ledger_excel": (
         "📥 正在为您打开案件台账下载…",
         "download_ledger_excel",
+    ),
+    "download_compliance_excel": (
+        "正在为您打开合规审查工作台账下载。",
+        "download_compliance_excel",
     ),
     "waiting_files": (
         "好的！请上传以下两个文件：\n\n"

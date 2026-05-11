@@ -141,9 +141,14 @@ export default function ComplianceFlow({
             <div className="text-sm font-semibold text-slate-200">请确认合规审查台账预览</div>
             <div className="text-xs text-slate-500 mt-0.5">确认后写入长期累计台账</div>
           </div>
-          <button onClick={() => setConfigOpen(true)} className="text-xs text-indigo-300 hover:text-indigo-200">
-            部门负责人配置
-          </button>
+          <div className="flex items-center gap-3">
+            <button onClick={downloadComplianceLedger} className="text-xs text-emerald-300 hover:text-emerald-200">
+              下载已有台账
+            </button>
+            <button onClick={() => setConfigOpen(true)} className="text-xs text-indigo-300 hover:text-indigo-200">
+              部门负责人配置
+            </button>
+          </div>
         </div>
 
         {error && <div className="text-red-400 text-xs mb-3">{error}</div>}
@@ -261,9 +266,14 @@ export default function ComplianceFlow({
     <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 my-3">
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm font-medium text-slate-300">请上传 OA 流程表单及审批记录 PDF</div>
-        <button onClick={() => setConfigOpen(true)} className="text-xs text-indigo-300 hover:text-indigo-200">
-          部门负责人配置
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={downloadComplianceLedger} className="text-xs text-emerald-300 hover:text-emerald-200">
+            下载已有台账
+          </button>
+          <button onClick={() => setConfigOpen(true)} className="text-xs text-indigo-300 hover:text-indigo-200">
+            部门负责人配置
+          </button>
+        </div>
       </div>
       {error && <div className="text-red-400 text-sm mb-3">❌ {error}</div>}
 

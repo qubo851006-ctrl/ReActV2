@@ -101,6 +101,16 @@ class LlmClientTests(unittest.TestCase):
         self.assertTrue(_is_model_status_question("当前模型是什么？"))
         self.assertFalse(_is_model_status_question("请帮我起草授权请示"))
 
+    def test_compliance_ledger_download_intent_is_supported(self):
+        from routers.chat import INTENT_RESPONSES, _VALID_INTENTS
+
+        self.assertIn("download_compliance_excel", _VALID_INTENTS)
+        self.assertIn("download_compliance_excel", INTENT_RESPONSES)
+        self.assertEqual(
+            INTENT_RESPONSES["download_compliance_excel"][1],
+            "download_compliance_excel",
+        )
+
     def test_runtime_model_routes_can_be_loaded_from_json(self):
         TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:

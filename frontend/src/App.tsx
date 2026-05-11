@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import type { ComponentType } from 'react'
 import type { Message, Stage, FlowProps, SkillKey, SessionMeta } from './types'
 import {
-  getHistory, clearHistory, sendChat, clearLedger, downloadTrainingExcel, downloadLedgerExcel,
+  getHistory, clearHistory, sendChat, clearLedger, downloadTrainingExcel, downloadLedgerExcel, downloadComplianceLedger,
   getSessions, createSession, deleteSession,
   getModelRoutes,
   setCurrentSessionId as setApiSessionId,
@@ -52,6 +52,7 @@ const VISION_MODEL_STORAGE_KEY = 'fadu.visionModel'
 const DOWNLOAD_ACTIONS: Partial<Record<Stage, { label: string; fn: () => void }>> = {
   download_training_excel: { label: '下载培训统计表 Excel', fn: downloadTrainingExcel },
   download_ledger_excel: { label: '下载案件台账 Excel', fn: downloadLedgerExcel },
+  download_compliance_excel: { label: '下载合规审查工作台账 Excel', fn: downloadComplianceLedger },
 }
 
 // 侧边栏技能按钮触发配置（新增技能在此加一行，并在 types.ts 的 SkillKey 里加成员）
