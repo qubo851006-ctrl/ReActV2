@@ -2,6 +2,14 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.13',
+    date: '2026-05-11',
+    changes: [
+      { type: 'feat', text: '审计问题分析新增双模型交叉校验：模型A完成初步分类后，模型B逐条审查并提出修正建议；分歧行以橙色高亮，展示A/B两种分类选项，用户手动确认后生成报告，提升分类可信度' },
+      { type: 'feat', text: '审计报告图表新增下载/复制功能：每张饼图右上角提供「下载 PNG」和「复制图片」按钮，以2倍分辨率截图，可直接粘贴到 Word/PPT' },
+    ],
+  },
+  {
     version: 'v2.12',
     date: '2026-05-11',
     changes: [

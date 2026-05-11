@@ -1,3 +1,4 @@
+import html2canvas from 'html2canvas'
 import { useRef, useState } from 'react'
 import {
   Cell,
@@ -117,7 +118,7 @@ function TagGroup({
   )
 }
 
-// ── 饼图 + 文字说明 ─────────────────────────────────────────────
+// ── 饼图 + 文字说明 + 下载/复制按钮 ────────────────────────────
 
 function PieSection({
   title,
@@ -130,6 +131,10 @@ function PieSection({
   total: number
   suffix: string
 }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [copying, setCopying] = useState(false)
+  const [copyError, setCopyError] = useState(false)
+
   const sorted = [...data].sort((a, b) => b.value - a.value)
   const top = sorted[0]
 
@@ -138,9 +143,73 @@ function PieSection({
     sorted.map(d => `${d.name}${suffix}占比 ${Math.round((d.value / total) * 100)}%（${d.value}项）`).join('，') + '。',
   ].join('')
 
+  async function captureCanvas(): Promise<HTMLCanvasElement | null> {
+    if (!containerRef.current) return null
+    return html2canvas(containerRef.current, {
+      backgroundColor: '#1e293b',
+      scale: 2,
+      useCORS: true,
+    })
+  }
+
+  async function downloadChart() {
+    const canvas = await captureCanvas()
+    if (!canvas) return
+    const a = document.createElement('a')
+    a.href = canvas.toDataURL('image/png')
+    a.download = `${title}.png`
+    a.click()
+  }
+
+  async function copyChart() {
+    setCopying(true)
+    try {
+      const canvas = await captureCanvas()
+      if (!canvas) return
+      await new Promise<void>((resolve, reject) => {
+        canvas.toBlob(async (blob) => {
+          if (!blob) { reject(new Error('截图失败')); return }
+          try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+            resolve()
+          } catch (e) {
+            reject(e)
+          }
+        })
+      })
+    } catch {
+      setCopyError(true)
+      setTimeout(() => setCopyError(false), 3000)
+    } finally {
+      setCopying(false)
+    }
+  }
+
   return (
-    <div className="bg-slate-800/60 border border-slate-700 rounded-2xl p-5 mb-4">
-      <div className="text-sm font-semibold text-slate-200 mb-3">{title}</div>
+    <div ref={containerRef} className="bg-slate-800/60 border border-slate-700 rounded-2xl p-5 mb-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-semibold text-slate-200">{title}</div>
+        <div className="flex gap-2">
+          <button
+            onClick={downloadChart}
+            className="text-xs px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-md transition-colors"
+          >
+            ⬇ 下载 PNG
+          </button>
+          <button
+            onClick={copyChart}
+            disabled={copying}
+            className={`text-xs px-2.5 py-1 rounded-md transition-colors disabled:opacity-50 ${
+              copyError
+                ? 'bg-red-700/60 text-red-200'
+                : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+            }`}
+            title={copyError ? '复制失败，请使用下载按钮' : ''}
+          >
+            {copying ? '复制中…' : copyError ? '复制失败' : '⬜ 复制图片'}
+          </button>
+        </div>
+      </div>
       <ResponsiveContainer width="100%" height={260}>
         <PieChart>
           <Pie
@@ -227,6 +296,23 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
     })
   }
 
+  // 采纳 A 的分类（清除分歧标记）
+  function acceptA(i: number) {
+    updateRow(i, { disagreement: undefined })
+  }
+
+  // 采纳 B 的分类（用 B 覆盖 A，清除分歧标记）
+  function acceptB(i: number) {
+    const d = rows[i].disagreement
+    if (!d) return
+    updateRow(i, {
+      category_l1: d.category_l1,
+      category_l2: d.category_l2,
+      domain: d.domain,
+      disagreement: undefined,
+    })
+  }
+
   // ── 下载 ──
 
   async function handleDownload() {
@@ -251,6 +337,8 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
     }
     return Object.entries(counts).map(([name, value]) => ({ name, value }))
   }
+
+  const disagreementCount = rows.filter(r => r.disagreement).length
 
   // ════════════════════════════════════════════════════════════════
   // RENDER
@@ -334,8 +422,8 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
       {phase === 'analyzing' && (
         <div className="py-8 text-center">
           <div className="text-3xl mb-3">⏳</div>
-          <div className="text-sm font-medium text-slate-200 mb-1">AI 分析中…</div>
-          <div className="text-xs text-slate-500">正在对审计发现进行智能分类，请稍候</div>
+          <div className="text-sm font-medium text-slate-200 mb-1">双模型交叉分析中…</div>
+          <div className="text-xs text-slate-500">模型A 初步分类 → 模型B 交叉校验，耗时约为单次的 2 倍，请稍候</div>
           <div className="flex justify-center gap-1 mt-5">
             {[0, 150, 300].map(delay => (
               <span
@@ -354,13 +442,20 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
           <div className="text-sm font-semibold text-slate-200 mb-1">
             ✅ 分类完成，请审查确认（共 {rows.length} 条）
           </div>
-          <div className="text-xs text-slate-500 mb-4">可修改下方下拉框中的分类结果；修改一级类别时二级自动切换</div>
+          <div className="text-xs text-slate-500 mb-3">可修改下方下拉框中的分类结果；修改一级类别时二级自动切换</div>
+
+          {/* 分歧汇总提示 */}
+          {disagreementCount > 0 && (
+            <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mb-3">
+              ⚠ 共 {disagreementCount} 条（橙色行）存在分类分歧，请选择「用A」或「用B」的分类后再生成报告
+            </div>
+          )}
 
           <div className="overflow-x-auto rounded-xl border border-slate-700 mb-4">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-700/60">
-                  <th className="px-3 py-2 text-left text-xs font-medium text-slate-400 w-10">序号</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-slate-400 w-12">序号</th>
                   <th className="px-3 py-2 text-left text-xs font-medium text-slate-400 w-36">发现问题</th>
                   <th className="px-3 py-2 text-left text-xs font-medium text-slate-400 w-36">问题类别一级</th>
                   <th className="px-3 py-2 text-left text-xs font-medium text-slate-400 w-36">问题类别二级</th>
@@ -368,58 +463,110 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row, i) => (
-                  <tr key={row.seq} className={i % 2 === 0 ? 'bg-slate-800' : 'bg-slate-800/60'}>
-                    <td className="px-3 py-2 text-slate-400 text-center">{row.seq}</td>
-                    <td
-                      className="px-3 py-2 text-slate-200 text-xs max-w-[144px] truncate"
-                      title={row.issue}
-                    >
-                      {row.issue}
-                    </td>
-                    {/* 一级类别 select */}
-                    <td className="px-3 py-2">
-                      <select
-                        value={row.category_l1}
-                        onChange={e => {
-                          const l1 = e.target.value
-                          updateRow(i, {
-                            category_l1: l1,
-                            category_l2: CATEGORY_TAXONOMY[l1]?.[0] ?? '',
-                          })
-                        }}
-                        className="w-full bg-slate-700 border border-slate-600 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-indigo-500"
+                {rows.map((row, i) => {
+                  const hasDisagreement = !!row.disagreement
+                  const rowBg = hasDisagreement
+                    ? 'bg-amber-900/30'
+                    : i % 2 === 0 ? 'bg-slate-800' : 'bg-slate-800/60'
+
+                  return (
+                    <tr key={row.seq} className={rowBg}>
+                      {/* 序号 + 分歧标记 */}
+                      <td className="px-3 py-2 text-slate-400 text-center">
+                        <div className="flex flex-col items-center gap-1">
+                          <span>{row.seq}</span>
+                          {hasDisagreement && (
+                            <span className="text-[10px] text-amber-400 font-medium">⚠ 分歧</span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* 发现问题 */}
+                      <td
+                        className="px-3 py-2 text-slate-200 text-xs max-w-[144px] truncate"
+                        title={row.issue}
                       >
-                        {row.category_l1 === '' && <option value="">未分类</option>}
-                        {L1_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </td>
-                    {/* 二级类别 select（随一级联动） */}
-                    <td className="px-3 py-2">
-                      <select
-                        value={row.category_l2}
-                        onChange={e => updateRow(i, { category_l2: e.target.value })}
-                        className="w-full bg-slate-700 border border-slate-600 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-indigo-500"
-                      >
-                        {row.category_l2 === '' && <option value="">未分类</option>}
-                        {(CATEGORY_TAXONOMY[row.category_l1] ?? []).map(c => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                    </td>
-                    {/* 业务领域 select */}
-                    <td className="px-3 py-2">
-                      <select
-                        value={row.domain}
-                        onChange={e => updateRow(i, { domain: e.target.value })}
-                        className="w-full bg-slate-700 border border-slate-600 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-indigo-500"
-                      >
-                        {row.domain === '' && <option value="">未分类</option>}
-                        {domains.map(d => <option key={d} value={d}>{d}</option>)}
-                      </select>
-                    </td>
-                  </tr>
-                ))}
+                        {row.issue}
+                      </td>
+
+                      {/* 一级类别 select */}
+                      <td className="px-3 py-2">
+                        <select
+                          value={row.category_l1}
+                          onChange={e => {
+                            const l1 = e.target.value
+                            updateRow(i, {
+                              category_l1: l1,
+                              category_l2: CATEGORY_TAXONOMY[l1]?.[0] ?? '',
+                              disagreement: undefined,
+                            })
+                          }}
+                          className="w-full bg-slate-700 border border-slate-600 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-indigo-500"
+                        >
+                          {row.category_l1 === '' && <option value="">未分类</option>}
+                          {L1_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        {/* A/B 选择按钮（仅分歧行） */}
+                        {hasDisagreement && (
+                          <div className="flex gap-1 mt-1.5">
+                            <button
+                              onClick={() => acceptA(i)}
+                              className="flex-1 text-[10px] px-1 py-0.5 bg-indigo-700/60 hover:bg-indigo-600/80 text-indigo-200 rounded transition-colors"
+                              title={`模型A：${row.category_l1}`}
+                            >
+                              用A
+                            </button>
+                            <button
+                              onClick={() => acceptB(i)}
+                              className="flex-1 text-[10px] px-1 py-0.5 bg-amber-700/60 hover:bg-amber-600/80 text-amber-200 rounded transition-colors"
+                              title={`模型B：${row.disagreement?.category_l1}`}
+                            >
+                              用B
+                            </button>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* 二级类别 select（随一级联动） */}
+                      <td className="px-3 py-2">
+                        <select
+                          value={row.category_l2}
+                          onChange={e => updateRow(i, { category_l2: e.target.value, disagreement: undefined })}
+                          className="w-full bg-slate-700 border border-slate-600 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-indigo-500"
+                        >
+                          {row.category_l2 === '' && <option value="">未分类</option>}
+                          {(CATEGORY_TAXONOMY[row.category_l1] ?? []).map(c => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                        {/* B 的建议值提示 */}
+                        {hasDisagreement && row.disagreement?.category_l2 && (
+                          <div className="text-[10px] text-amber-400/70 mt-1 truncate" title={`B建议：${row.disagreement.category_l2}`}>
+                            B: {row.disagreement.category_l2}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* 业务领域 select */}
+                      <td className="px-3 py-2">
+                        <select
+                          value={row.domain}
+                          onChange={e => updateRow(i, { domain: e.target.value, disagreement: undefined })}
+                          className="w-full bg-slate-700 border border-slate-600 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-indigo-500"
+                        >
+                          {row.domain === '' && <option value="">未分类</option>}
+                          {domains.map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        {/* B 的建议值提示 */}
+                        {hasDisagreement && row.disagreement?.domain && (
+                          <div className="text-[10px] text-amber-400/70 mt-1 truncate" title={`B建议：${row.disagreement.domain}`}>
+                            B: {row.disagreement.domain}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

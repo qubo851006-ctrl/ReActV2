@@ -17,7 +17,7 @@ from auth_utils import get_current_user
 from audit_log import write_log
 from db import get_db
 from models import User
-from config import MODEL_CHAT
+from config import MODEL_CHAT, MODEL_INTENT
 from llm_client import get_llm_client
 from upload_validation import UploadValidationError, validate_excel_upload
 
@@ -46,6 +46,12 @@ CATEGORY_TAXONOMY: dict[str, list[str]] = {
 # ── 数据模型 ──────────────────────────────────────────────────────
 
 
+class Disagreement(BaseModel):
+    category_l1: str
+    category_l2: str
+    domain: str
+
+
 class AuditRow(BaseModel):
     seq: int
     issue: str
@@ -53,6 +59,7 @@ class AuditRow(BaseModel):
     category_l1: str = ""
     category_l2: str = ""
     domain: str = ""
+    disagreement: Disagreement | None = None  # B 的修正建议，None 表示 A/B 一致
 
 
 class DownloadRequest(BaseModel):
@@ -177,6 +184,83 @@ def _parse_llm_output(text: str, rows: list[dict]) -> list[dict]:
     return result
 
 
+def _build_review_prompt(rows_a: list[dict], domains: list[str]) -> str:
+    """构建模型B的审查提示词：逐条质检模型A的分类结果。"""
+    taxonomy_lines = "\n".join(
+        f"- {l1}：{'/ '.join(l2_list)}"
+        for l1, l2_list in CATEGORY_TAXONOMY.items()
+    )
+    domain_lines = "\n".join(f"- {d}" for d in domains)
+    rows_json = json.dumps(
+        [{"序号": r["seq"], "发现问题": r["issue"],
+          "已分类一级": r["category_l1"], "已分类二级": r["category_l2"],
+          "已分类领域": r["domain"]}
+         for r in rows_a],
+        ensure_ascii=False,
+        indent=2,
+    )
+    return f"""你是企业内部审计问题分类质检专家。请逐条审查以下AI分类结果是否准确。
+
+【分类体系（一级→二级）】
+{taxonomy_lines}
+
+【可用业务领域】
+{domain_lines}
+
+【待审查的分类结果】
+{rows_json}
+
+请严格按如下格式返回，只输出JSON数组，不含任何其他文字：
+[{{"序号": 1, "需要修正": false, "问题类别一级": "...", "问题类别二级": "...", "业务领域": "..."}}]
+
+规则：
+- "需要修正"为false时，后三个字段填写与原分类相同的值
+- "需要修正"为true时，填写你认为更准确的分类（必须来自给定分类体系）
+- 所有字段不可为空"""
+
+
+def _call_review_llm(rows_a: list[dict], domains: list[str]) -> list[dict]:
+    """调用模型B对A的分类结果进行逐条质检，返回需修正的行列表。"""
+    import logging
+    client = get_llm_client()
+    prompt = _build_review_prompt(rows_a, domains)
+    resp = client.chat.completions.create(
+        model=MODEL_INTENT,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
+    text = resp.choices[0].message.content or ""
+    match = re.search(r'\[.*\]', text, re.DOTALL)
+    if not match:
+        logging.warning("模型B返回内容无法提取JSON数组，原始文本: %s", text[:200])
+        return []  # B 解析失败时静默返回空，不影响 A 的结果
+    try:
+        parsed = json.loads(match.group())
+    except json.JSONDecodeError:
+        logging.warning("模型B返回JSON解析失败，原始文本: %s", text[:200])
+        return []
+    return [item for item in parsed if item.get("需要修正")]
+
+
+def _merge_ab_results(rows_a: list[dict], corrections: list[dict]) -> list[dict]:
+    """将 B 的修正意见合并进 A 的结果，加入 disagreement 字段。"""
+    correction_map = {item["序号"]: item for item in corrections}
+    result = []
+    for row in rows_a:
+        corr = correction_map.get(row["seq"])
+        merged = dict(row)
+        if corr:
+            merged["disagreement"] = {
+                "category_l1": corr.get("问题类别一级", ""),
+                "category_l2": corr.get("问题类别二级", ""),
+                "domain": corr.get("业务领域", ""),
+            }
+        else:
+            merged["disagreement"] = None
+        result.append(merged)
+    return result
+
+
 # ── 路由 ──────────────────────────────────────────────────────────
 
 
@@ -210,24 +294,39 @@ async def analyze_audit(
 
     prompt = _build_prompt(rows, doms)
 
-    def _call_llm() -> list:
+    def _run_full_analysis() -> list:
         client = get_llm_client()
-        resp = client.chat.completions.create(
+
+        # Step 1: 模型 A（MODEL_CHAT）初步分类
+        resp_a = client.chat.completions.create(
             model=MODEL_CHAT,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
         )
-        llm_text = resp.choices[0].message.content or ""
-        return _parse_llm_output(llm_text, rows)
+        rows_a = _parse_llm_output(resp_a.choices[0].message.content or "", rows)
+
+        # Step 2: 模型 B（MODEL_INTENT）逐条审查 A 的结果
+        try:
+            corrections = _call_review_llm(rows_a, doms)
+        except Exception:
+            corrections = []  # B 失败静默降级，只返回 A 的结果
+
+        # Step 3: 合并差异信息
+        return _merge_ab_results(rows_a, corrections)
 
     try:
-        classified_rows = await asyncio.to_thread(_call_llm)
+        classified_rows = await asyncio.to_thread(_run_full_analysis)
     except ValueError as e:
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM 调用失败：{e}")
 
-    write_log(db, user, "audit_analyze", f"审计分析，共 {len(classified_rows)} 条问题", request)
+    disagreement_count = sum(1 for r in classified_rows if r.get("disagreement"))
+    write_log(
+        db, user, "audit_analyze",
+        f"审计分析 {len(classified_rows)} 条，其中 {disagreement_count} 条存在分类分歧",
+        request,
+    )
     return {"rows": classified_rows, "total": len(classified_rows)}
 
 

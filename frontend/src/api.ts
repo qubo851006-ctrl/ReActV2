@@ -69,6 +69,7 @@ export async function sendChat(
   model: string,
   visionModel: string,
   onChunk: (text: string) => void,
+  useFayanKb: boolean = false,
 ): Promise<{ reply: string; next_stage: string; kb_conversation_id: string }> {
   const resp = await apiFetch(`${BASE}/chat`, {
     method: 'POST',
@@ -77,6 +78,7 @@ export async function sendChat(
       message,
       use_kb: useKb,
       kb_conversation_id: kbConvId,
+      use_fayan_kb: useFayanKb,
       session_id: _sid,
       model,
       vision_model: visionModel,
@@ -207,6 +209,67 @@ export function downloadLedgerExcel() {
   window.open(`${BASE}/ledger/download-excel`, '_blank')
 }
 
+// ── 合规审查工作台账 ───────────────────────────────────────────
+
+export interface ComplianceReviewRow {
+  review_time: string
+  review_unit: string
+  review_opinion: '同意' | '不予同意' | '建议补充完善'
+  detail: string
+  implementation: '/' | '已按要求补充完善' | '未见落实' | '不涉及'
+}
+
+export interface ComplianceItem {
+  title: string
+  procedure: '董事会审议' | '总办会审议'
+  undertaking_department: string
+  background_materials: string[]
+  review_rows: ComplianceReviewRow[]
+  warnings?: string[]
+}
+
+export async function extractComplianceLedger(pdfFile: File, visionModel: string): Promise<ComplianceItem> {
+  const form = new FormData()
+  form.append('pdf_file', pdfFile)
+  form.append('vision_model', visionModel)
+  const r = await apiFetch(`${BASE}/compliance/extract`, { method: 'POST', body: form })
+  if (!r.ok) throw new Error(await r.text())
+  const d = await r.json() as { item: ComplianceItem }
+  return d.item
+}
+
+export async function writeComplianceLedger(item: ComplianceItem): Promise<{ ok: boolean; count: number; sequence: number; reply: string }> {
+  const r = await apiFetch(`${BASE}/compliance/write`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...item, session_id: _sid }),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export function downloadComplianceLedger() {
+  window.open(`${BASE}/compliance/download`, '_blank')
+}
+
+export async function getComplianceResponsiblePersons(): Promise<Record<string, string>> {
+  const r = await apiFetch(`${BASE}/compliance/responsible-persons`)
+  if (!r.ok) throw new Error(await r.text())
+  const d = await r.json() as { persons: Record<string, string> }
+  return d.persons
+}
+
+export async function updateComplianceResponsiblePersons(persons: Record<string, string>): Promise<Record<string, string>> {
+  const r = await apiFetch(`${BASE}/compliance/responsible-persons`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ persons }),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  const d = await r.json() as { persons: Record<string, string> }
+  return d.persons
+}
+
 // ── 三台账合并 ────────────────────────────────────────────────
 
 export interface MergeStats {
@@ -245,6 +308,11 @@ export interface AuditRow {
   category_l1: string
   category_l2: string
   domain: string
+  disagreement?: {           // B 模型的修正建议，undefined 表示 A/B 一致
+    category_l1: string
+    category_l2: string
+    domain: string
+  }
 }
 
 export interface AuditAnalysisResult {
