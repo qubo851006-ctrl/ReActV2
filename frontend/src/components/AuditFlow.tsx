@@ -153,6 +153,10 @@ function PieSection({
         backgroundColor: '#ffffff',
         scale: 2,
         useCORS: true,
+        width: el.scrollWidth,
+        height: el.scrollHeight,
+        windowWidth: el.scrollWidth,
+        windowHeight: el.scrollHeight,
       })
       await new Promise<void>((resolve, reject) => {
         canvas.toBlob(async (blob) => {
