@@ -97,7 +97,6 @@ export default function App() {
   const [stages, setStages] = useState<Record<string, Stage>>({})
   const [input, setInput] = useState('')
   const [useKb, setUseKb] = useState(false)
-  const [useFayanKb, setUseFayanKb] = useState(false)
   const [chatModel, setChatModel] = useState<ChatModel>(() => {
     const saved = window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY)
     return saved && isChatModel(saved) ? saved : (saved || DEFAULT_CHAT_MODEL)
@@ -238,7 +237,7 @@ export default function App() {
             return { ...prev, [sessionId]: updated }
           })
         }
-      }, useFayanKb)
+      })
 
       if (res.reply) {
         if (gotFirstChunk) {
@@ -343,10 +342,6 @@ export default function App() {
     if (!v) setKbConvId('')
   }
 
-  function handleToggleFayanKb(v: boolean) {
-    setUseFayanKb(v)
-  }
-
   const isIdle = stage === 'idle'
   const isDownloadStage = stage in DOWNLOAD_ACTIONS
   const activeDownload = DOWNLOAD_ACTIONS[stage]
@@ -358,7 +353,6 @@ export default function App() {
       <Sidebar
         stage={stage}
         useKb={useKb}
-        useFayanKb={useFayanKb}
         user={user}
         sessions={sessions}
         currentSessionId={currentSessionId}
@@ -367,7 +361,6 @@ export default function App() {
         onClearLedger={handleClearLedger}
         onClearChat={handleClearChat}
         onToggleKb={handleToggleKb}
-        onToggleFayanKb={handleToggleFayanKb}
         onNewSession={handleNewSession}
         onSwitchSession={switchSession}
         onDeleteSession={handleDeleteSession}

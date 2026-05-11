@@ -2,6 +2,14 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.16',
+    date: '2026-05-11',
+    changes: [
+      { type: 'fix', text: '审计报告图表复制优化：移除「下载 PNG」按钮，仅保留「复制图片」；复制时底色自动设为白色，便于粘贴到 Word/PPT；复制按钮不出现在截图内容中' },
+      { type: 'fix', text: '移除法研知识库 MCP 调用功能：删除相关后端客户端、调试脚本、配置项及前端开关，精简功能入口' },
+    ],
+  },
+  {
     version: 'v2.15',
     date: '2026-05-11',
     changes: [

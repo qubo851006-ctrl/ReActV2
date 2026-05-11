@@ -44,13 +44,6 @@ ZHISHU_BASE_URL   = os.getenv("ZHISHU_BASE_URL",    "")
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL",    "")
 OLLAMA_API_KEY    = os.getenv("OLLAMA_API_KEY",     "ollama")
 
-# 法研知识库（相似问题 MCP 服务）
-FAYAN_APPID       = os.getenv("FAYAN_APPID",       "")
-FAYAN_APIKEY      = os.getenv("FAYAN_APIKEY",      "")
-FAYAN_APISECRET   = os.getenv("FAYAN_APISECRET",   "")
-FAYAN_MCP_URL     = os.getenv("FAYAN_MCP_URL",     "")
-FAYAN_AUTH_URL    = os.getenv("FAYAN_AUTH_URL",    "")
-
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)

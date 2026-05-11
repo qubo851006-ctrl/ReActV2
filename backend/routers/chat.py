@@ -363,7 +363,6 @@ class ChatRequest(BaseModel):
     message: str
     use_kb: bool = False
     kb_conversation_id: str = ""
-    use_fayan_kb: bool = False
     session_id: str = ""
     model: str | None = None
     vision_model: str | None = None
@@ -428,13 +427,6 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)):
             yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
             return
 
-        # ── 法研知识库模式（MCP SSE，不阻塞事件循环）──────────────
-        if req.use_fayan_kb:
-            from utils.fayan_kb_client import query_fayan_kb
-            reply = await query_fayan_kb(req.message)
-            await asyncio.to_thread(_append_and_save, history, req.message, reply, uid, sid)
-            yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
-            return
 
         # ── 知识库模式（异步 HTTP，不再阻塞）──────────────────────
         if req.use_kb:

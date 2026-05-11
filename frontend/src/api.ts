@@ -69,7 +69,6 @@ export async function sendChat(
   model: string,
   visionModel: string,
   onChunk: (text: string) => void,
-  useFayanKb: boolean = false,
 ): Promise<{ reply: string; next_stage: string; kb_conversation_id: string }> {
   const resp = await apiFetch(`${BASE}/chat`, {
     method: 'POST',
@@ -78,7 +77,6 @@ export async function sendChat(
       message,
       use_kb: useKb,
       kb_conversation_id: kbConvId,
-      use_fayan_kb: useFayanKb,
       session_id: _sid,
       model,
       vision_model: visionModel,

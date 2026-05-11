@@ -118,7 +118,7 @@ function TagGroup({
   )
 }
 
-// ── 饼图 + 文字说明 + 下载/复制按钮 ────────────────────────────
+// ── 饼图 + 文字说明 + 复制按钮 ─────────────────────────────────
 
 function PieSection({
   title,
@@ -143,98 +143,77 @@ function PieSection({
     sorted.map(d => `${d.name}${suffix}占比 ${Math.round((d.value / total) * 100)}%（${d.value}项）`).join('，') + '。',
   ].join('')
 
-  async function captureCanvas(): Promise<HTMLCanvasElement | null> {
-    if (!containerRef.current) return null
-    return html2canvas(containerRef.current, {
-      backgroundColor: '#1e293b',
-      scale: 2,
-      useCORS: true,
-    })
-  }
-
-  async function downloadChart() {
-    const canvas = await captureCanvas()
-    if (!canvas) return
-    const a = document.createElement('a')
-    a.href = canvas.toDataURL('image/png')
-    a.download = `${title}.png`
-    a.click()
-  }
-
   async function copyChart() {
+    const el = containerRef.current
+    if (!el) return
     setCopying(true)
+    el.style.backgroundColor = 'white'
     try {
-      const canvas = await captureCanvas()
-      if (!canvas) return
+      const canvas = await html2canvas(el, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        useCORS: true,
+      })
       await new Promise<void>((resolve, reject) => {
         canvas.toBlob(async (blob) => {
           if (!blob) { reject(new Error('截图失败')); return }
-          try {
-            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-            resolve()
-          } catch (e) {
-            reject(e)
-          }
+          navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+            .then(resolve).catch(reject)
         })
       })
     } catch {
       setCopyError(true)
       setTimeout(() => setCopyError(false), 3000)
     } finally {
+      el.style.backgroundColor = ''
       setCopying(false)
     }
   }
 
   return (
-    <div ref={containerRef} className="bg-slate-800/60 border border-slate-700 rounded-2xl p-5 mb-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-sm font-semibold text-slate-200">{title}</div>
-        <div className="flex gap-2">
-          <button
-            onClick={downloadChart}
-            className="text-xs px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-md transition-colors"
-          >
-            ⬇ 下载 PNG
-          </button>
-          <button
-            onClick={copyChart}
-            disabled={copying}
-            className={`text-xs px-2.5 py-1 rounded-md transition-colors disabled:opacity-50 ${
-              copyError
-                ? 'bg-red-700/60 text-red-200'
-                : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
-            }`}
-            title={copyError ? '复制失败，请使用下载按钮' : ''}
-          >
-            {copying ? '复制中…' : copyError ? '复制失败' : '⬜ 复制图片'}
-          </button>
-        </div>
+    <div className="relative bg-slate-800/60 border border-slate-700 rounded-2xl p-5 mb-4">
+      {/* 复制按钮：绝对定位在外层容器右上角，不在截图范围内 */}
+      <button
+        onClick={copyChart}
+        disabled={copying}
+        className={`absolute top-3 right-3 z-10 text-xs px-2.5 py-1 rounded-md transition-colors disabled:opacity-50 ${
+          copyError
+            ? 'bg-red-700/60 text-red-200'
+            : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+        }`}
+        title={copyError ? '复制失败，请截图保存' : '复制图片到剪贴板'}
+      >
+        {copying ? '复制中…' : copyError ? '复制失败' : '⬜ 复制图片'}
+      </button>
+      {/* 截图区域：不含按钮 */}
+      <div ref={containerRef}>
+        <div className="text-sm font-semibold text-slate-200 mb-3 pr-20">{title}</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <PieChart>
+            <Pie
+              data={data}
+              cx="50%"
+              cy="50%"
+              outerRadius={90}
+              dataKey="value"
+              label={({ name, percent }: PieLabelProps) =>
+                `${name ?? ''} ${((percent ?? 0) * 100).toFixed(0)}%`
+              }
+              labelLine={true}
+            >
+              {data.map((_, i) => (
+                <Cell key={i} fill={COLORS[i % COLORS.length]} />
+              ))}
+            </Pie>
+            <Tooltip
+              formatter={(value) => [`${value}项`, '数量'] as [string, string]}
+              contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }}
+            />
+            <Legend wrapperStyle={{ color: '#94a3b8', fontSize: 12 }} />
+          </PieChart>
+        </ResponsiveContainer>
+        <p className="text-xs text-slate-400 mt-2 leading-relaxed">{description}</p>
       </div>
-      <ResponsiveContainer width="100%" height={260}>
-        <PieChart>
-          <Pie
-            data={data}
-            cx="50%"
-            cy="50%"
-            outerRadius={90}
-            dataKey="value"
-            label={({ name, percent }: PieLabelProps) =>
-              `${name ?? ''} ${((percent ?? 0) * 100).toFixed(0)}%`
-            }
-            labelLine={true}
-          >
-            {data.map((_, i) => (
-              <Cell key={i} fill={COLORS[i % COLORS.length]} />
-            ))}
-          </Pie>
-          <Tooltip
-            formatter={(value) => [`${value}项`, '数量'] as [string, string]}
-            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }}
-          />
-          <Legend wrapperStyle={{ color: '#94a3b8', fontSize: 12 }} />
-        </PieChart>
-      </ResponsiveContainer>
-      <p className="text-xs text-slate-400 mt-2 leading-relaxed">{description}</p>
     </div>
   )
 }

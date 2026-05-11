@@ -5,7 +5,6 @@ import { APP_TITLE } from '../appMeta'
 interface Props {
   stage: Stage
   useKb: boolean
-  useFayanKb: boolean
   user: AuthUser
   sessions: SessionMeta[]
   currentSessionId: string
@@ -14,7 +13,6 @@ interface Props {
   onClearLedger: () => void
   onClearChat: () => void
   onToggleKb: (v: boolean) => void
-  onToggleFayanKb: (v: boolean) => void
   onNewSession: () => void
   onSwitchSession: (id: string) => void
   onDeleteSession: (id: string) => void
@@ -92,8 +90,8 @@ function SessionItem({
 }
 
 export default function Sidebar({
-  stage, useKb, useFayanKb, user, sessions, currentSessionId, creatingSession = false,
-  onSkill, onClearLedger, onClearChat, onToggleKb, onToggleFayanKb,
+  stage, useKb, user, sessions, currentSessionId, creatingSession = false,
+  onSkill, onClearLedger, onClearChat, onToggleKb,
   onNewSession, onSwitchSession, onDeleteSession,
 }: Props) {
   const busy = stage !== 'idle'
@@ -249,23 +247,7 @@ export default function Sidebar({
           </div>
         </label>
 
-        {/* 法研知识库 */}
-        <label className="flex items-center gap-3 cursor-pointer">
-          <div className="relative flex-shrink-0">
-            <input
-              type="checkbox"
-              className="sr-only peer"
-              checked={useFayanKb}
-              onChange={e => onToggleFayanKb(e.target.checked)}
-            />
-            <div className="w-9 h-5 bg-slate-600 rounded-full peer-checked:bg-violet-500 transition-colors" />
-            <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
-          </div>
-          <div>
-            <div className="text-xs font-medium text-slate-300">⚖️ 法研知识库</div>
-            <div className="text-xs text-slate-500 mt-0.5">{useFayanKb ? '已启用' : '相似问题检索'}</div>
-          </div>
-        </label>
+
       </div>
     </aside>
   )
