@@ -2,6 +2,14 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.17',
+    date: '2026-05-11',
+    changes: [
+      { type: 'feat', text: '台账类功能补充右上角常驻下载入口：培训统计、案件台账生成、三台账合并、合规审查台账均可在功能卡片内直接点击"下载已有台账"，无需重新上传或走完整生成流程即可导出已有台账' },
+      { type: 'fix', text: '补齐合规审查工作台账下载链路：聊天中说"下载合规审查台账"可触发下载，功能页上传、预览、完成状态均提供下载入口' },
+    ],
+  },
+  {
     version: 'v2.16',
     date: '2026-05-11',
     changes: [
