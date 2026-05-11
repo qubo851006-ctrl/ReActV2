@@ -11,12 +11,14 @@ from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from config import AI_HTTP_VERIFY_SSL, MODEL_CHAT
+from config import AI_HTTP_VERIFY_SSL
 from file_store import atomic_save_workbook, file_lock
 from llm_client import build_ai_http_headers
 
 warnings.filterwarnings("ignore")
 load_dotenv(override=True)
+
+MODEL_CHAT = os.getenv("MODEL_CHAT", "glm-5-outside")
 
 def _get_client():
     return OpenAI(

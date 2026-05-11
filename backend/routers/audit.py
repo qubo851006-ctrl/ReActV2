@@ -17,11 +17,12 @@ from auth_utils import get_current_user
 from audit_log import write_log
 from db import get_db
 from models import User
-from config import MODEL_CHAT, MODEL_INTENT
 from llm_client import get_llm_client
 from upload_validation import UploadValidationError, validate_excel_upload
 
 router = APIRouter(prefix="/api/audit")
+AUDIT_CLASSIFY_MODEL = "qwen2.5-72b"
+AUDIT_REVIEW_MODEL = "DeepSeek-V3"
 
 
 # ── 分类体系常量 ───────────────────────────────────────────────────
@@ -225,7 +226,7 @@ def _call_review_llm(rows_a: list[dict], domains: list[str]) -> list[dict]:
     client = get_llm_client()
     prompt = _build_review_prompt(rows_a, domains)
     resp = client.chat.completions.create(
-        model=MODEL_INTENT,
+        model=AUDIT_REVIEW_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
     )
@@ -297,15 +298,15 @@ async def analyze_audit(
     def _run_full_analysis() -> list:
         client = get_llm_client()
 
-        # Step 1: 模型 A（MODEL_CHAT）初步分类
+        # Step 1: 模型 A 固定用 Qwen，避免全局默认模型影响审计分类。
         resp_a = client.chat.completions.create(
-            model=MODEL_CHAT,
+            model=AUDIT_CLASSIFY_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
         )
         rows_a = _parse_llm_output(resp_a.choices[0].message.content or "", rows)
 
-        # Step 2: 模型 B（MODEL_INTENT）逐条审查 A 的结果
+        # Step 2: 模型 B 固定用 DeepSeek 逐条审查 A 的结果。
         try:
             corrections = _call_review_llm(rows_a, doms)
         except Exception:

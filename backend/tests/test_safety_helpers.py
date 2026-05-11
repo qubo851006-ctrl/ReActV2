@@ -1,6 +1,4 @@
 import json
-import importlib
-import os
 import sys
 import tempfile
 import unittest
@@ -119,23 +117,6 @@ class LlmClientTests(unittest.TestCase):
             self.assertEqual(routes["default_chat_model"], "DeepSeek-V3")
             self.assertEqual(routes["chat_models"], ["qwen2.5-72b", "DeepSeek-V3"])
 
-    def test_glm5_is_removed_from_runtime_model_routes(self):
-        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
-            path = Path(tmpdir) / "model_routes.json"
-            path.write_text(json.dumps({
-                "default_chat_model": "glm-5-outside",
-                "chat_models": ["qwen2.5-72b", "DeepSeek-V3", "glm-5-outside"],
-                "vision_models": ["qwen2.5-vl-72b"],
-            }), encoding="utf-8")
-
-            routes = load_model_routes(path)
-            public = public_model_routes(path)
-
-            self.assertEqual(routes["default_chat_model"], "qwen2.5-72b")
-            self.assertEqual(routes["chat_models"], ["qwen2.5-72b", "DeepSeek-V3"])
-            self.assertNotIn("glm-5-outside", [item["value"] for item in public["chat_models"]])
-
     def test_runtime_model_routes_public_shape_has_labels(self):
         TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
@@ -152,30 +133,6 @@ class LlmClientTests(unittest.TestCase):
             self.assertEqual(routes["chat_models"][0]["value"], "DeepSeek-V3")
             self.assertEqual(routes["chat_models"][0]["label"], "DeepSeek V3")
 
-    def test_config_disables_glm5_even_when_env_requests_it(self):
-        import config
-
-        previous_env = {
-            "MODEL_CHAT": os.environ.get("MODEL_CHAT"),
-            "MODEL_INTENT": os.environ.get("MODEL_INTENT"),
-            "AI_CHAT_MODELS": os.environ.get("AI_CHAT_MODELS"),
-        }
-        os.environ["MODEL_CHAT"] = "glm-5-outside"
-        os.environ["MODEL_INTENT"] = "glm-5-outside"
-        os.environ["AI_CHAT_MODELS"] = "qwen2.5-72b,DeepSeek-V3,glm-5-outside"
-        try:
-            reloaded = importlib.reload(config)
-            self.assertEqual(reloaded.MODEL_CHAT, "qwen2.5-72b")
-            self.assertEqual(reloaded.MODEL_INTENT, "qwen2.5-72b")
-            self.assertEqual(reloaded.AI_CHAT_MODELS, ["qwen2.5-72b", "DeepSeek-V3"])
-        finally:
-            for key, value in previous_env.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
-            importlib.reload(config)
-
     def test_host_header_is_optional(self):
         self.assertEqual(build_ai_http_headers("aiplus.airchina.com.cn:18080"), {"Host": "aiplus.airchina.com.cn:18080"})
         self.assertEqual(build_ai_http_headers(""), {})
@@ -191,6 +148,45 @@ class LlmClientTests(unittest.TestCase):
         self.assertIn("AI 服务连接失败", message)
         self.assertIn("证书校验失败", message)
         self.assertIn("AI_HTTP_VERIFY_SSL=false", message)
+
+    def test_audit_review_model_uses_deepseek_not_global_default(self):
+        from routers.audit import _call_review_llm
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = "[]"
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch("routers.audit.get_llm_client", return_value=mock_client):
+            _call_review_llm([{
+                "seq": 1,
+                "issue": "issue",
+                "description": "",
+                "category_l1": "其他",
+                "category_l2": "其他",
+                "domain": "工程领域",
+            }], ["工程领域"])
+
+        self.assertEqual(mock_client.chat.completions.create.call_args.kwargs["model"], "DeepSeek-V3")
+
+    def test_audit_cross_check_models_are_fixed_without_removing_glm_globally(self):
+        from routers.audit import AUDIT_CLASSIFY_MODEL, AUDIT_REVIEW_MODEL
+        from model_routes import load_model_routes
+
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            path = Path(tmpdir) / "model_routes.json"
+            path.write_text(json.dumps({
+                "default_chat_model": "glm-5-outside",
+                "chat_models": ["qwen2.5-72b", "DeepSeek-V3", "glm-5-outside"],
+                "vision_models": ["qwen2.5-vl-72b"],
+            }), encoding="utf-8")
+
+            routes = load_model_routes(path)
+
+        self.assertEqual(AUDIT_CLASSIFY_MODEL, "qwen2.5-72b")
+        self.assertEqual(AUDIT_REVIEW_MODEL, "DeepSeek-V3")
+        self.assertIn("glm-5-outside", routes["chat_models"])
 
 
 class OllamaModelRoutingTests(unittest.TestCase):

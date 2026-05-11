@@ -17,6 +17,7 @@ export interface ModelRoutes {
 export const CHAT_MODEL_OPTIONS: ModelOption[] = [
   { value: 'qwen2.5-72b', label: 'Qwen2.5 72B', hint: '默认' },
   { value: 'DeepSeek-V3', label: 'DeepSeek V3', hint: '高速' },
+  { value: 'glm-5-outside', label: 'GLM-5', hint: '集团' },
 ]
 
 export const VISION_MODEL_OPTIONS: ModelOption[] = [
