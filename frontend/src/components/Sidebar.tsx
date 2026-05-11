@@ -5,6 +5,7 @@ import { APP_TITLE } from '../appMeta'
 interface Props {
   stage: Stage
   useKb: boolean
+  useFayanKb: boolean
   user: AuthUser
   sessions: SessionMeta[]
   currentSessionId: string
@@ -13,6 +14,7 @@ interface Props {
   onClearLedger: () => void
   onClearChat: () => void
   onToggleKb: (v: boolean) => void
+  onToggleFayanKb: (v: boolean) => void
   onNewSession: () => void
   onSwitchSession: (id: string) => void
   onDeleteSession: (id: string) => void
@@ -24,6 +26,7 @@ const skills = [
   { key: 'auth' as const,     icon: '📝', label: '授权请示起草',   desc: '上传呈批件，AI起草授权请示Word',   iconBg: 'bg-emerald-500/15',iconText: 'text-emerald-400' },
   { key: 'merge' as const,    icon: '🔀', label: '三台账合并',     desc: '合并采购/合同/财务系统导出台账',   iconBg: 'bg-amber-500/15',  iconText: 'text-amber-400' },
   { key: 'audit' as const,    icon: '🔍', label: '审计问题分析',   desc: '上传审计汇总表，AI分类并生成报告', iconBg: 'bg-red-500/15',    iconText: 'text-red-400' },
+  { key: 'compliance' as const, icon: '📑', label: '合规审查台账', desc: '上传OA审批PDF，生成累计台账', iconBg: 'bg-cyan-500/15', iconText: 'text-cyan-400' },
 ]
 
 function groupSessions(sessions: SessionMeta[]) {
@@ -89,8 +92,8 @@ function SessionItem({
 }
 
 export default function Sidebar({
-  stage, useKb, user, sessions, currentSessionId, creatingSession = false,
-  onSkill, onClearLedger, onClearChat, onToggleKb,
+  stage, useKb, useFayanKb, user, sessions, currentSessionId, creatingSession = false,
+  onSkill, onClearLedger, onClearChat, onToggleKb, onToggleFayanKb,
   onNewSession, onSwitchSession, onDeleteSession,
 }: Props) {
   const busy = stage !== 'idle'
@@ -226,10 +229,11 @@ export default function Sidebar({
         </button>
       </div>
 
-      {/* Knowledge base toggle */}
-      <div className="px-4 py-4 border-t border-slate-700/50">
+      {/* Knowledge base toggles */}
+      <div className="px-4 py-3 border-t border-slate-700/50 space-y-3">
+        {/* 企业知识库 */}
         <label className="flex items-center gap-3 cursor-pointer">
-          <div className="relative">
+          <div className="relative flex-shrink-0">
             <input
               type="checkbox"
               className="sr-only peer"
@@ -240,8 +244,26 @@ export default function Sidebar({
             <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
           </div>
           <div>
-            <div className="text-xs font-medium text-slate-300">📚 知识库问答</div>
-            <div className="text-xs text-slate-500 mt-0.5">{useKb ? '已启用' : '使用企业知识库检索'}</div>
+            <div className="text-xs font-medium text-slate-300">📚 企业知识库</div>
+            <div className="text-xs text-slate-500 mt-0.5">{useKb ? '已启用' : '智弈智枢检索'}</div>
+          </div>
+        </label>
+
+        {/* 法研知识库 */}
+        <label className="flex items-center gap-3 cursor-pointer">
+          <div className="relative flex-shrink-0">
+            <input
+              type="checkbox"
+              className="sr-only peer"
+              checked={useFayanKb}
+              onChange={e => onToggleFayanKb(e.target.checked)}
+            />
+            <div className="w-9 h-5 bg-slate-600 rounded-full peer-checked:bg-violet-500 transition-colors" />
+            <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
+          </div>
+          <div>
+            <div className="text-xs font-medium text-slate-300">⚖️ 法研知识库</div>
+            <div className="text-xs text-slate-500 mt-0.5">{useFayanKb ? '已启用' : '相似问题检索'}</div>
           </div>
         </label>
       </div>

@@ -1,5 +1,9 @@
 import os
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
 
 load_dotenv(override=True)
 
@@ -40,6 +44,13 @@ ZHISHU_BASE_URL   = os.getenv("ZHISHU_BASE_URL",    "")
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL",    "")
 OLLAMA_API_KEY    = os.getenv("OLLAMA_API_KEY",     "ollama")
 
+# 法研知识库（相似问题 MCP 服务）
+FAYAN_APPID       = os.getenv("FAYAN_APPID",       "")
+FAYAN_APIKEY      = os.getenv("FAYAN_APIKEY",      "")
+FAYAN_APISECRET   = os.getenv("FAYAN_APISECRET",   "")
+FAYAN_MCP_URL     = os.getenv("FAYAN_MCP_URL",     "")
+FAYAN_AUTH_URL    = os.getenv("FAYAN_AUTH_URL",    "")
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -61,3 +72,7 @@ LEDGER_EXCEL_PATH  = os.path.join(DATA_ROOT, "案件台账", "诉讼案件台账
 LEGAL_ARCHIVE_ROOT = os.path.join(DATA_ROOT, "案件文书")
 AUTH_LEDGER_DIR    = os.path.join(DATA_ROOT, "授权台账")
 AUTH_LEDGER_PATH   = os.path.join(DATA_ROOT, "授权台账", "授权委托台账.xlsx")
+COMPLIANCE_LEDGER_DIR = os.path.join(DATA_ROOT, "合规审查台账")
+COMPLIANCE_LEDGER_JSON_PATH = os.path.join(COMPLIANCE_LEDGER_DIR, "records.json")
+COMPLIANCE_LEDGER_EXCEL_PATH = os.path.join(COMPLIANCE_LEDGER_DIR, "合规审查工作台账.xlsx")
+COMPLIANCE_RESPONSIBLE_PERSONS_PATH = os.path.join(COMPLIANCE_LEDGER_DIR, "responsible_persons.json")

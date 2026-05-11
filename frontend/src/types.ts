@@ -12,6 +12,7 @@ export type Stage =
   | 'download_ledger_excel'
   | 'waiting_ledger_merge_files'
   | 'waiting_audit_file'
+  | 'waiting_compliance_file'
 
 export interface Message {
   role: 'user' | 'assistant'
@@ -23,10 +24,11 @@ export interface FlowProps {
   onComplete: (reply: string) => void
   onCancel: () => void
   visionModel?: string
+  canManageResponsiblePersons?: boolean
 }
 
 /** 侧边栏技能按钮的 key，新增技能在此加一个联合类型成员 */
-export type SkillKey = 'training' | 'ledger' | 'auth' | 'merge' | 'audit'
+export type SkillKey = 'training' | 'ledger' | 'auth' | 'merge' | 'audit' | 'compliance'
 
 export interface SessionMeta {
   id: string

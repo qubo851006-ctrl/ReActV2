@@ -35,6 +35,7 @@ _VALID_INTENTS = {
     "waiting_files",
     "waiting_ledger_files",
     "waiting_auth_file",
+    "waiting_compliance_file",
     "query_company",
     "other",
 }
@@ -45,13 +46,15 @@ _INTENT_DESCRIPTIONS_WORKFLOW = """\
 - download_ledger_excel：用户想下载或导出案件台账、诉讼台账 Excel
 - waiting_files：用户想统计培训签到、归档培训文件、新增培训记录（需上传文件，不是单纯下载）
 - waiting_ledger_files：用户想处理案件台账、整理法律文书、新增案件记录（需上传文书，不是单纯下载）
-- waiting_auth_file：用户想起草授权请示、根据呈批件生成授权文件"""
+- waiting_auth_file：用户想起草授权请示、根据呈批件生成授权文件
+- waiting_compliance_file：用户想根据 OA 审批 PDF 生成合规审查工作台账"""
 
 # 通用对话可以主动触发的 stage
 _ACTIONABLE_STAGES = {
     "waiting_files",
     "waiting_ledger_files",
     "waiting_auth_file",
+    "waiting_compliance_file",
     "waiting_ledger_merge_files",
     "waiting_audit_file",
 }
@@ -60,6 +63,7 @@ _WORKFLOW_HINTS = """\
 - waiting_files：用户有培训通知/签到表需要统计归档
 - waiting_ledger_files：用户有法律文书（起诉状/判决书/裁定书/强制执行申请）需要录入台账
 - waiting_auth_file：用户需要根据呈批件起草授权请示或授权书
+- waiting_compliance_file：用户需要根据 OA 流程表单/审批记录 PDF 生成合规审查工作台账
 - waiting_ledger_merge_files：用户需要合并合同/采购/财务多个系统导出的台账 Excel
 - waiting_audit_file：用户需要对审计发现问题进行 AI 分类分析"""
 
@@ -127,7 +131,7 @@ async def _classify_async(client: AsyncOpenAI, message: str) -> dict:
 
 【普通对话】格式：{{"intent": "other", "next_stage": null}}
 next_stage 可选值（仅当用户有明确操作需求时填入，否则填 null）：
-waiting_files / waiting_ledger_files / waiting_auth_file / waiting_ledger_merge_files / waiting_audit_file"""
+waiting_files / waiting_ledger_files / waiting_auth_file / waiting_compliance_file / waiting_ledger_merge_files / waiting_audit_file"""
 
     resp = await client.chat.completions.create(
         model=resolve_intent_model(),
@@ -359,6 +363,7 @@ class ChatRequest(BaseModel):
     message: str
     use_kb: bool = False
     kb_conversation_id: str = ""
+    use_fayan_kb: bool = False
     session_id: str = ""
     model: str | None = None
     vision_model: str | None = None
@@ -393,6 +398,10 @@ INTENT_RESPONSES = {
         "- 支持扫描版 PDF（自动 OCR 识别）",
         "waiting_auth_file",
     ),
+    "waiting_compliance_file": (
+        "好的！请上传 **OA 流程表单及审批记录 PDF**，系统会提取重大事项、程序、各单位审查意见、签署时间和背景材料，确认后写入长期累计合规审查工作台账。",
+        "waiting_compliance_file",
+    ),
 }
 
 
@@ -415,6 +424,14 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)):
         # ── 模型状态查询（直接返回，无需 LLM）─────────────────────
         if _is_model_status_question(req.message):
             reply = f"当前文字模型：{selected_model}\n当前图像模型：{selected_vision_model}"
+            await asyncio.to_thread(_append_and_save, history, req.message, reply, uid, sid)
+            yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
+            return
+
+        # ── 法研知识库模式（MCP SSE，不阻塞事件循环）──────────────
+        if req.use_fayan_kb:
+            from utils.fayan_kb_client import query_fayan_kb
+            reply = await query_fayan_kb(req.message)
             await asyncio.to_thread(_append_and_save, history, req.message, reply, uid, sid)
             yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
             return

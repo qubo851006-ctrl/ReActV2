@@ -14,6 +14,7 @@ import LedgerFlow from './components/LedgerFlow'
 import AuthFlow from './components/AuthFlow'
 import LedgerMergeFlow from './components/LedgerMergeFlow'
 import AuditFlow from './components/AuditFlow'
+import ComplianceFlow from './components/ComplianceFlow'
 import VersionPanel from './components/VersionPanel'
 import AuthGate from './components/AuthGate'
 import type { AuthUser } from './components/AuthGate'
@@ -41,6 +42,7 @@ const FLOW_COMPONENTS: Partial<Record<Stage, ComponentType<FlowProps>>> = {
   waiting_auth_file: AuthFlow,
   waiting_ledger_merge_files: LedgerMergeFlow,
   waiting_audit_file: AuditFlow,
+  waiting_compliance_file: ComplianceFlow,
 }
 
 const CHAT_MODEL_STORAGE_KEY = 'fadu.chatModel'
@@ -79,6 +81,11 @@ const SKILL_TRIGGERS: Record<SkillKey, { msg: string; reply: string; stage: Stag
     reply: '好的！请上传**审计发现问题汇总表**（Excel 格式），系统将自动识别问题列，通过 AI 对每条问题进行**双维度分类**：\n\n- 📌 **问题类别**（内控缺陷 / 制度执行 / 资金管理 / 采购管理）\n- 🏢 **业务领域**（工程业务 / 酒店业务 / 物业管理 / 资产管理）\n\n分类完成后可审查修改，并生成可视化分析报告。',
     stage: 'waiting_audit_file',
   },
+  compliance: {
+    msg: '📑 合规审查工作台账生成',
+    reply: '好的！请上传 OA 流程表单及审批记录 PDF，系统会提取重大事项、程序、审查意见、签署时间和背景材料，确认后写入长期累计合规审查工作台账。',
+    stage: 'waiting_compliance_file',
+  },
 }
 
 export default function App() {
@@ -86,11 +93,11 @@ export default function App() {
   // 切换会话时不清空已缓存的消息，Session A 在后台流式输出时消息直接写入 A 的队列
   const [messagesMap, setMessagesMap] = useState<Record<string, Message[]>>({})
   const messagesMapRef = useRef<Record<string, Message[]>>({})
-  messagesMapRef.current = messagesMap
 
   const [stages, setStages] = useState<Record<string, Stage>>({})
   const [input, setInput] = useState('')
   const [useKb, setUseKb] = useState(false)
+  const [useFayanKb, setUseFayanKb] = useState(false)
   const [chatModel, setChatModel] = useState<ChatModel>(() => {
     const saved = window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY)
     return saved && isChatModel(saved) ? saved : (saved || DEFAULT_CHAT_MODEL)
@@ -109,13 +116,20 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string>('')
   const currentSessionIdRef = useRef<string>('')
-  currentSessionIdRef.current = currentSessionId
 
   // 从 map 中取当前会话的派生值
   const messages = messagesMap[currentSessionId] ?? []
   const stage: Stage = stages[currentSessionId] ?? 'idle'
   const sending = sendingMap[currentSessionId] ?? false
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    messagesMapRef.current = messagesMap
+  }, [messagesMap])
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId
+  }, [currentSessionId])
 
   function setStage(next: Stage) {
     const id = currentSessionIdRef.current
@@ -224,7 +238,7 @@ export default function App() {
             return { ...prev, [sessionId]: updated }
           })
         }
-      })
+      }, useFayanKb)
 
       if (res.reply) {
         if (gotFirstChunk) {
@@ -329,6 +343,10 @@ export default function App() {
     if (!v) setKbConvId('')
   }
 
+  function handleToggleFayanKb(v: boolean) {
+    setUseFayanKb(v)
+  }
+
   const isIdle = stage === 'idle'
   const isDownloadStage = stage in DOWNLOAD_ACTIONS
   const activeDownload = DOWNLOAD_ACTIONS[stage]
@@ -340,6 +358,7 @@ export default function App() {
       <Sidebar
         stage={stage}
         useKb={useKb}
+        useFayanKb={useFayanKb}
         user={user}
         sessions={sessions}
         currentSessionId={currentSessionId}
@@ -348,6 +367,7 @@ export default function App() {
         onClearLedger={handleClearLedger}
         onClearChat={handleClearChat}
         onToggleKb={handleToggleKb}
+        onToggleFayanKb={handleToggleFayanKb}
         onNewSession={handleNewSession}
         onSwitchSession={switchSession}
         onDeleteSession={handleDeleteSession}
@@ -410,6 +430,7 @@ export default function App() {
                   { icon: '📝', label: '授权请示', desc: '呈批件 → 授权书起草',   color: 'border-emerald-500/30 hover:border-emerald-500/60 hover:bg-emerald-500/5',key: 'auth'     as const },
                   { icon: '🔀', label: '三台账合并', desc: '合同/采购/财务合并',  color: 'border-amber-500/30 hover:border-amber-500/60 hover:bg-amber-500/5',    key: 'merge'    as const },
                   { icon: '🔍', label: '审计分析', desc: 'AI分类审计问题',        color: 'border-red-500/30 hover:border-red-500/60 hover:bg-red-500/5',          key: 'audit'    as const },
+                  { icon: '📑', label: '合规审查台账', desc: 'OA审批PDF → 累计台账', color: 'border-cyan-500/30 hover:border-cyan-500/60 hover:bg-cyan-500/5', key: 'compliance' as const },
                   { icon: '💬', label: '直接对话', desc: '询问、查询、或聊任意话题', color: 'border-slate-600/50 hover:border-slate-500 hover:bg-slate-700/20',    key: null },
                 ].map(item => (
                   <button
@@ -453,6 +474,7 @@ export default function App() {
                     setStages(prev => ({ ...prev, [sid]: 'idle' }))
                   }}
                   visionModel={visionModel}
+                  canManageResponsiblePersons={user.role === 'admin'}
                 />
               </div>
             )

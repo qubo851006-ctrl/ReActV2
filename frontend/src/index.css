@@ -4,6 +4,24 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+  .field-input {
+    @apply w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-indigo-500;
+  }
+
+  .field-textarea {
+    @apply w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-indigo-500 resize-none;
+  }
+
+  .table-input {
+    @apply w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-white outline-none focus:border-indigo-500;
+  }
+
+  .table-textarea {
+    @apply w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-white outline-none focus:border-indigo-500 resize-none;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
