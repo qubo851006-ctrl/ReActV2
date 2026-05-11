@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import openpyxl
 
@@ -13,10 +14,46 @@ from utils.compliance_ledger import (  # noqa: E402
     append_record,
     build_review_rows,
     create_compliance_workbook,
+    extract_compliance_item,
     load_responsible_persons,
     normalize_review_opinion,
     save_responsible_persons,
 )
+
+
+class _FakeMessage:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class _FakeChoice:
+    def __init__(self, content: str):
+        self.message = _FakeMessage(content)
+
+
+class _FakeResponse:
+    def __init__(self, content: str):
+        self.choices = [_FakeChoice(content)]
+
+
+class _FakeCompletions:
+    def __init__(self, responses: list[str]):
+        self.responses = list(responses)
+        self.models: list[str] = []
+
+    def create(self, **kwargs):
+        self.models.append(kwargs["model"])
+        return _FakeResponse(self.responses.pop(0))
+
+
+class _FakeChat:
+    def __init__(self, completions: _FakeCompletions):
+        self.completions = completions
+
+
+class _FakeClient:
+    def __init__(self, completions: _FakeCompletions):
+        self.chat = _FakeChat(completions)
 
 
 class ComplianceLedgerOpinionTests(unittest.TestCase):
@@ -171,6 +208,45 @@ class ComplianceLedgerPersistenceTests(unittest.TestCase):
 
             self.assertEqual([r["sequence"] for r in records], [1, 2])
             self.assertEqual(records[1]["title"], "事项二")
+
+
+class ComplianceLedgerModelTests(unittest.TestCase):
+    def test_extract_compliance_item_uses_qwen_then_deepseek_review(self):
+        qwen_json = """
+        {
+          "title": "原始标题",
+          "procedure": "董事会审议",
+          "attachments": ["附件一.pdf"],
+          "undertaking": {"department": "财务部", "person": "杨焕", "time": "2026-05-01", "opinion_text": "拟同意", "detail": "", "implementation": "/"},
+          "countersign": [],
+          "compliance": {"department": "审计部/法务合规部", "person": "李莹", "time": "2026-05-02", "opinion_text": "拟同意", "detail": "", "implementation": "/"},
+          "chief": {"person": "胡鹏斌", "time": "2026-05-03", "opinion_text": "拟同意", "detail": "", "implementation": "/"},
+          "warnings": []
+        }
+        """
+        deepseek_json = """
+        {
+          "title": "校验后的标题",
+          "procedure": "总办会审议",
+          "attachments": ["附件二.xlsx"],
+          "undertaking": {"department": "财务部", "person": "杨焕", "time": "2026-05-01", "opinion_text": "拟同意", "detail": "", "implementation": "/"},
+          "countersign": [],
+          "compliance": {"department": "审计部/法务合规部", "person": "李莹", "time": "2026-05-02", "opinion_text": "拟同意", "detail": "", "implementation": "/"},
+          "chief": {"person": "胡鹏斌", "time": "2026-05-03", "opinion_text": "拟同意", "detail": "", "implementation": "/"},
+          "warnings": ["DeepSeek 已校验"]
+        }
+        """
+        completions = _FakeCompletions([qwen_json, deepseek_json])
+
+        with patch("llm_client.get_llm_client", return_value=_FakeClient(completions)):
+            item = extract_compliance_item("OA正文内容", {"财务部": "杨焕"})
+
+        self.assertEqual(completions.models, ["qwen2.5-72b", "DeepSeek-V3"])
+        self.assertNotIn("glm-5-outside", completions.models)
+        self.assertEqual(item["title"], "校验后的标题")
+        self.assertEqual(item["procedure"], "总办会审议")
+        self.assertEqual(item["background_materials"], ["附件二"])
+        self.assertIn("DeepSeek 已校验", item["warnings"])
 
 
 if __name__ == "__main__":

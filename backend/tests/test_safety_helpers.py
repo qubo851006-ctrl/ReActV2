@@ -117,6 +117,23 @@ class LlmClientTests(unittest.TestCase):
             self.assertEqual(routes["default_chat_model"], "DeepSeek-V3")
             self.assertEqual(routes["chat_models"], ["qwen2.5-72b", "DeepSeek-V3"])
 
+    def test_glm5_is_removed_from_runtime_model_routes(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            path = Path(tmpdir) / "model_routes.json"
+            path.write_text(json.dumps({
+                "default_chat_model": "glm-5-outside",
+                "chat_models": ["qwen2.5-72b", "DeepSeek-V3", "glm-5-outside"],
+                "vision_models": ["qwen2.5-vl-72b"],
+            }), encoding="utf-8")
+
+            routes = load_model_routes(path)
+            public = public_model_routes(path)
+
+            self.assertEqual(routes["default_chat_model"], "qwen2.5-72b")
+            self.assertEqual(routes["chat_models"], ["qwen2.5-72b", "DeepSeek-V3"])
+            self.assertNotIn("glm-5-outside", [item["value"] for item in public["chat_models"]])
+
     def test_runtime_model_routes_public_shape_has_labels(self):
         TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:

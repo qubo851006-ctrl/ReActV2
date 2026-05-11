@@ -14,6 +14,7 @@ from config import (
 from file_store import atomic_write_text, file_lock
 
 MODEL_ROUTES_PATH = Path(DATA_ROOT) / "model_routes.json"
+DISABLED_CHAT_MODELS = {"glm-5-outside"}
 
 # ── 内存缓存（避免在 async 端点中重复同步读文件阻塞事件循环）──────
 _routes_cache: dict[str, Any] | None = None
@@ -50,7 +51,8 @@ def _model_options(values: list[str]) -> list[dict[str, str]]:
     return [{"value": value, "label": _label_for_model(value)} for value in values]
 
 
-def _normalize_models(raw: Any, fallback: list[str]) -> list[str]:
+def _normalize_models(raw: Any, fallback: list[str], disabled: set[str] | None = None) -> list[str]:
+    disabled = disabled or set()
     values: list[str] = []
     if isinstance(raw, list):
         for item in raw:
@@ -59,13 +61,14 @@ def _normalize_models(raw: Any, fallback: list[str]) -> list[str]:
                 value = item.strip()
             elif isinstance(item, dict):
                 value = str(item.get("value") or "").strip()
-            if value and value not in values:
+            if value and value not in disabled and value not in values:
                 values.append(value)
-    return values or list(fallback)
+    fallback_values = [value for value in fallback if value not in disabled]
+    return values or fallback_values
 
 
 def _default_routes() -> dict[str, Any]:
-    chat_models = list(AI_CHAT_MODELS)
+    chat_models = [model for model in AI_CHAT_MODELS if model not in DISABLED_CHAT_MODELS]
     vision_models = list(AI_VISION_MODELS)
     return {
         "default_chat_model": resolve_model("qwen2.5-72b", chat_models, MODEL_CHAT),
@@ -85,7 +88,7 @@ def load_model_routes(path: Path = MODEL_ROUTES_PATH) -> dict[str, Any]:
         except Exception:
             raw = {}
 
-    chat_models = _normalize_models(raw.get("chat_models"), defaults["chat_models"])
+    chat_models = _normalize_models(raw.get("chat_models"), defaults["chat_models"], DISABLED_CHAT_MODELS)
     vision_models = _normalize_models(raw.get("vision_models"), defaults["vision_models"])
     return {
         "default_chat_model": resolve_model(raw.get("default_chat_model"), chat_models, defaults["default_chat_model"]),
@@ -108,7 +111,7 @@ def public_model_routes(path: Path = MODEL_ROUTES_PATH) -> dict[str, Any]:
 
 def save_model_routes(payload: dict[str, Any], path: Path = MODEL_ROUTES_PATH) -> dict[str, Any]:
     routes = load_model_routes(path)
-    chat_models = _normalize_models(payload.get("chat_models"), routes["chat_models"])
+    chat_models = _normalize_models(payload.get("chat_models"), routes["chat_models"], DISABLED_CHAT_MODELS)
     vision_models = _normalize_models(payload.get("vision_models"), routes["vision_models"])
     saved = {
         "default_chat_model": resolve_model(payload.get("default_chat_model"), chat_models, routes["default_chat_model"]),

@@ -2,6 +2,14 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.15',
+    date: '2026-05-11',
+    changes: [
+      { type: 'fix', text: '合规审查工作台账抽取改为 Qwen2.5 72B 主提取、DeepSeek V3 二次校验，不再使用无权限的 GLM-5 模型，避免上传 PDF 后出现 403 模型权限错误' },
+      { type: 'fix', text: '运行时模型路由和前端模型选项移除 glm-5-outside，历史 model_routes 配置中如残留 GLM-5 也会自动过滤并回退到 Qwen2.5 72B' },
+    ],
+  },
+  {
     version: 'v2.14',
     date: '2026-05-11',
     changes: [

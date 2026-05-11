@@ -10,10 +10,12 @@ from config import (
     COMPLIANCE_LEDGER_EXCEL_PATH,
     COMPLIANCE_LEDGER_JSON_PATH,
     COMPLIANCE_RESPONSIBLE_PERSONS_PATH,
-    MODEL_CHAT,
 )
 from file_store import atomic_write_text, file_lock
 
+
+COMPLIANCE_EXTRACT_MODEL = "qwen2.5-72b"
+COMPLIANCE_REVIEW_MODEL = "DeepSeek-V3"
 
 DEFAULT_RESPONSIBLE_PERSONS = {
     "规划与资产部/深化改革领导小组办公室": "富小鹏",
@@ -182,11 +184,8 @@ def extract_pdf_text(pdf_bytes: bytes, filename: str, vision_model: str | None =
     return text
 
 
-def extract_compliance_item(text: str, responsible_persons: dict[str, str] | None = None) -> dict[str, Any]:
-    from llm_client import get_llm_client
-
-    persons = responsible_persons or load_responsible_persons()
-    prompt = f"""你是企业合规审查台账录入助手。请从 OA 流程表单/审批记录中提取合规审查工作台账字段。
+def _build_extract_prompt(text: str, persons: dict[str, str]) -> str:
+    return f"""你是企业合规审查台账录入助手。请从 OA 流程表单/审批记录中提取合规审查工作台账字段。
 
 部门负责人配置：
 {json.dumps(persons, ensure_ascii=False, indent=2)}
@@ -216,15 +215,62 @@ def extract_compliance_item(text: str, responsible_persons: dict[str, str] | Non
 
 PDF/OA内容：
 {text[:16000]}"""
+
+
+def _build_review_prompt(text: str, persons: dict[str, str], extracted: dict[str, Any]) -> str:
+    return f"""你是企业合规审查台账复核助手。请基于同一份 OA 流程表单/审批记录，对模型 A 已提取的合规审查台账 JSON 逐项校验。
+
+要求：
+1. 重点校验重大事项标题、董事会/总办会程序、承办单位意见、会签单位意见、合规管理牵头部门意见、首席合规官意见、签署时间、背景材料。
+2. 如模型 A 漏提或错提，请直接修正为最终可写入台账的 JSON。
+3. 返回格式必须与模型 A JSON 完全一致，只返回 JSON 对象，不要解释文字。
+4. 不确定但不影响填表的内容，可在 warnings 中追加提示。
+
+部门负责人配置：
+{json.dumps(persons, ensure_ascii=False, indent=2)}
+
+模型 A 提取结果：
+{json.dumps(extracted, ensure_ascii=False, indent=2)}
+
+PDF/OA内容：
+{text[:16000]}"""
+
+
+def _append_warning(item: dict[str, Any], warning: str) -> dict[str, Any]:
+    next_item = dict(item)
+    warnings = list(next_item.get("warnings") or [])
+    warnings.append(warning)
+    next_item["warnings"] = warnings
+    return next_item
+
+
+def extract_compliance_item(text: str, responsible_persons: dict[str, str] | None = None) -> dict[str, Any]:
+    from llm_client import get_llm_client
+
+    persons = responsible_persons or load_responsible_persons()
     client = get_llm_client()
-    response = client.chat.completions.create(
-        model=MODEL_CHAT,
-        messages=[{"role": "user", "content": prompt}],
+
+    extract_response = client.chat.completions.create(
+        model=COMPLIANCE_EXTRACT_MODEL,
+        messages=[{"role": "user", "content": _build_extract_prompt(text, persons)}],
         temperature=0,
         max_tokens=3000,
     )
-    raw = response.choices[0].message.content or ""
-    return normalize_extracted_item(_parse_json_object(raw))
+    extract_raw = extract_response.choices[0].message.content or ""
+    extracted = _parse_json_object(extract_raw)
+
+    try:
+        review_response = client.chat.completions.create(
+            model=COMPLIANCE_REVIEW_MODEL,
+            messages=[{"role": "user", "content": _build_review_prompt(text, persons, extracted)}],
+            temperature=0,
+            max_tokens=3000,
+        )
+        reviewed = _parse_json_object(review_response.choices[0].message.content or "")
+    except Exception as exc:
+        reviewed = _append_warning(extracted, f"DeepSeek 校验失败，已保留 Qwen 提取结果：{exc}")
+
+    return normalize_extracted_item(reviewed)
 
 
 def load_records(path: str | Path = COMPLIANCE_LEDGER_JSON_PATH) -> list[dict[str, Any]]:

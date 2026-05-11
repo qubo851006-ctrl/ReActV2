@@ -23,7 +23,7 @@ def resolve_model(requested: str | None, allowed_models: list[str], default_mode
 
 AI_CHAT_MODELS = [
     item.strip()
-    for item in os.getenv("AI_CHAT_MODELS", "qwen2.5-72b,DeepSeek-V3,glm-5-outside").split(",")
+    for item in os.getenv("AI_CHAT_MODELS", "qwen2.5-72b,DeepSeek-V3").split(",")
     if item.strip()
 ]
 if MODEL_CHAT and MODEL_CHAT not in AI_CHAT_MODELS:
