@@ -23,6 +23,8 @@ def _calc_duration_hours(start: str, end: str, days: int) -> float:
     try:
         s = datetime.strptime(start.strip(), "%H:%M")
         e = datetime.strptime(end.strip(), "%H:%M")
+        if e <= s:
+            return 0.0
         minutes_per_day = int((e - s).seconds / 60)
         total_minutes = minutes_per_day * max(days, 1)
         return round(total_minutes / 40, 1)
