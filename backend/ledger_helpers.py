@@ -9,14 +9,29 @@ import base64
 import logging
 import shutil
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
 from llm_client import get_llm_client
 from config import MODEL_CHAT, LEDGER_JSON_PATH, LEDGER_OUTPUT_DIR, LEGAL_ARCHIVE_ROOT
+from config import AIRCHINA_API_KEY, AIRCHINA_BASE_URL, AI_HTTP_VERIFY_SSL
 from file_store import atomic_write_bytes, atomic_write_text, file_lock
 from model_routes import resolve_vision_model
 from upload_validation import safe_upload_name
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+LEDGER_LLM_CONCURRENCY = _env_positive_int("LEDGER_LLM_CONCURRENCY", 3)
+LEDGER_OCR_CONCURRENCY = _env_positive_int("LEDGER_OCR_CONCURRENCY", 2)
+_AIRCHINA_OCR_CHANNEL = os.getenv("AIRCHINA_OCR_CHANNEL", "25")
 
 
 # ── 提取文书文字 ──────────────────────────────────────────────
@@ -45,51 +60,203 @@ def extract_file_text(file_bytes: bytes, filename: str) -> str:
     return text.strip()
 
 
-def ocr_pdf_with_vision(pdf_bytes: bytes, model: str | None = None) -> str:
-    """用视觉模型逐页识别扫描版 PDF，返回全文。"""
+def _ocr_page_with_airchina(page_index: int, img_b64: str) -> tuple[int, str]:
+    """用中航信专用 OCR 服务识别单页图片，返回 (页码, 文字)。"""
+    import httpx
+    import warnings
+
+    url = AIRCHINA_BASE_URL.rstrip("/") + f"/oneapi/proxy/{_AIRCHINA_OCR_CHANNEL}"
+    headers = {
+        "Authorization": f"Bearer {AIRCHINA_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "header": {"sid": f"ocr-{page_index}"},
+        "parameter": {
+            "ocr": {
+                "result_option": "normal",
+                "result_format": "json,markdown",
+                "output_type": "one_shot",
+                "exif_option": "0",
+                "json_element_option": "",
+                "markdown_element_option": "watermark=0,page_header=0,page_footer=0,page_number=0",
+                "sed_element_option": "",
+            }
+        },
+        "payload": {"imageData": img_b64},
+    }
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with httpx.Client(verify=AI_HTTP_VERIFY_SSL, timeout=30, follow_redirects=True) as client:
+            resp = client.post(url, headers=headers, json=body)
+    resp.raise_for_status()
+
+    result = resp.json()
+    header = result.get("header", {})
+    if header.get("code") != 0:
+        raise RuntimeError(f"OCR 服务错误：{header.get('message', '未知')}")
+
+    docs = result.get("payload", {}).get("result", {}).get("document", [])
+    for doc in docs:
+        if doc.get("name") == "markdown":
+            text = doc.get("value", "")
+            text = re.sub(r"^```\w*\s*", "", text.strip())
+            text = re.sub(r"\s*```$", "", text).strip()
+            return page_index, text
+
+    return page_index, ""
+
+
+def _ocr_page_with_vision(client, selected_model: str, page_index: int, img_b64: str) -> tuple[int, str]:
+    """用视觉模型 OCR 单页图片（降级兜底用）。"""
+    response = client.chat.completions.create(
+        model=selected_model,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                {"type": "text",
+                 "text": "请将图片中的所有文字原文提取出来，保持段落结构，不要添加任何说明或总结。"},
+            ],
+        }],
+    )
+    return page_index, (response.choices[0].message.content or "").strip()
+
+
+def _render_pdf_to_images(pdf_bytes: bytes) -> list[tuple[int, str]]:
+    """将 PDF 每页渲染为 (页码, base64 JPEG) 列表。"""
     import fitz
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    images = []
+    try:
+        for idx, page in enumerate(doc):
+            pix = page.get_pixmap(dpi=150)
+            img_b64 = base64.b64encode(pix.tobytes("jpeg", jpg_quality=85)).decode()
+            images.append((idx, img_b64))
+    finally:
+        doc.close()
+    return images
+
+
+def ocr_pdf_with_vision(pdf_bytes: bytes, model: str | None = None) -> str:
+    """扫描版 PDF 文字提取：优先中航信专用 OCR（并发），失败则降级视觉模型。"""
+    page_images = _render_pdf_to_images(pdf_bytes)
+    if not page_images:
+        return ""
+
+    texts = [""] * len(page_images)
+    max_workers = min(max(1, LEDGER_OCR_CONCURRENCY), len(page_images))
+
+    # 优先：中航信专用 OCR
+    if AIRCHINA_API_KEY:
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(_ocr_page_with_airchina, idx, img_b64)
+                    for idx, img_b64 in page_images
+                ]
+                for future in as_completed(futures):
+                    idx, text = future.result()
+                    texts[idx] = text
+            combined = "\n".join(t for t in texts if t)
+            if combined.strip():
+                return combined
+            logging.warning("中航信 OCR 返回空文本，降级视觉模型")
+        except Exception as e:
+            logging.warning("中航信 OCR 失败，降级视觉模型：%s", e)
+            texts = [""] * len(page_images)
+
+    # 降级：视觉模型
     client = get_llm_client()
     selected_model = resolve_vision_model(model)
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    all_texts = []
-    for page in doc:
-        pix = page.get_pixmap(dpi=150)
-        img_b64 = base64.b64encode(pix.tobytes("jpeg", jpg_quality=85)).decode()
-        response = client.chat.completions.create(
-            model=selected_model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url",
-                     "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
-                    {"type": "text",
-                     "text": "请将图片中的所有文字原文提取出来，保持段落结构，不要添加任何说明或总结。"},
-                ],
-            }],
-        )
-        t = response.choices[0].message.content.strip()
-        if t:
-            all_texts.append(t)
-    doc.close()
-    return "\n".join(all_texts)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(_ocr_page_with_vision, client, selected_model, idx, img_b64)
+            for idx, img_b64 in page_images
+        ]
+        for future in as_completed(futures):
+            idx, text = future.result()
+            texts[idx] = text
+
+    return "\n".join(t for t in texts if t)
+
+
+def render_pdf_pages(pdf_bytes: bytes) -> list[str]:
+    """将 PDF 每页渲染为 base64 JPEG，返回有序列表（供外部逐页 OCR 使用）。"""
+    return [img_b64 for _, img_b64 in _render_pdf_to_images(pdf_bytes)]
+
+
+def ocr_single_page(img_b64: str, model: str | None = None) -> str:
+    """OCR 单页图片：优先中航信专用 OCR，失败则降级视觉模型。"""
+    if AIRCHINA_API_KEY:
+        try:
+            _, text = _ocr_page_with_airchina(0, img_b64)
+            if text.strip():
+                return text
+            logging.warning("中航信 OCR 返回空文本，降级视觉模型")
+        except Exception as e:
+            logging.warning("中航信 OCR 失败，降级视觉模型：%s", e)
+
+    client = get_llm_client()
+    selected_model = resolve_vision_model(model)
+    response = client.chat.completions.create(
+        model=selected_model,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                {"type": "text",
+                 "text": "请将图片中的所有文字原文提取出来，保持段落结构，不要添加任何说明或总结。"},
+            ],
+        }],
+    )
+    return (response.choices[0].message.content or "").strip()
 
 
 def detect_doc_type_by_content(text: str) -> str:
-    """用 AI 从内容判断文书类型。"""
+    """从文书内容判断文书类型。优先关键词快速匹配，匹配不到才调 LLM 兜底。"""
     if not text:
         return "其他"
+    head = text[:600]
+
+    # ── 关键词快速匹配（按优先级从高到低）──────────────────────
+    if "强制执行申请书" in head or ("强制执行" in head and "申请书" in head):
+        return "强制执行申请书"
+    if "再审申请书" in head or ("再审" in head and "申请书" in head):
+        return "再审申请书"
+    # 上诉状先于起诉状匹配，避免"民事上诉状"被错匹配为起诉状
+    if "上诉状" in head or "民事上诉状" in head:
+        return "上诉状"
+    if "起诉状" in head or "民事起诉状" in head:
+        return "起诉状"
+    if "一审民事判决书" in head or ("民事判决书" in head and "民初" in text[:1000]):
+        return "一审判决书"
+    if "二审民事判决书" in head or ("民事判决书" in head and "民终" in text[:1000]):
+        return "二审判决书"
+    if "民事判决书" in head or "判决书" in head:
+        return "判决书"
+    if "民事裁定书" in head or "裁定书" in head:
+        return "裁定书"
+    if "情况说明" in head or "业务情况" in head or "情况汇报" in head:
+        return "业务情况说明"
+
+    # ── LLM 兜底（关键词均未命中时）────────────────────────────
     client = get_llm_client()
     response = client.chat.completions.create(
         model=MODEL_CHAT,
         messages=[{"role": "user", "content": (
-            "请判断以下法律文书是什么类型，只回复类型名称，从下列选项中选一个：\n"
-            "起诉状、上诉状、再审申请书、一审判决书、二审判决书、判决书、裁定书、强制执行申请书、其他\n\n"
+            "请判断以下文书是什么类型，只回复类型名称，从下列选项中选一个：\n"
+            "起诉状、上诉状、再审申请书、一审判决书、二审判决书、判决书、裁定书、强制执行申请书、业务情况说明、其他\n\n"
+            "注意：业务情况说明是公司内部撰写的案件背景说明文件，非法院正式文书。\n\n"
             f"文书内容（前500字）：\n{text[:500]}"
         )}],
         max_tokens=20,
     )
     raw = response.choices[0].message.content.strip()
-    for t in ["强制执行申请书", "再审申请书", "一审判决书", "二审判决书", "裁定书", "上诉状", "起诉状", "判决书"]:
+    for t in ["强制执行申请书", "再审申请书", "一审判决书", "二审判决书", "裁定书", "上诉状", "起诉状", "判决书", "业务情况说明"]:
         if t in raw:
             return t
     return "其他"
@@ -143,11 +310,143 @@ PROMPT_EXECUTION = """你是法务专家，从以下强制执行申请书中提�
 文书内容：
 {text}"""
 
+PROMPT_BUSINESS_DESC = """你是法务专家助手，从以下公司内部业务情况说明中提取案件背景信息，以JSON格式返回。
+
+要求：
+- 业务背景：案件涉及的合同/交易经过、争议事实及业务说明，尽量完整保留关键细节，不超过500字
+
+只返回JSON，不要其他文字：
+{"业务背景":""}
+
+文书内容：
+{text}"""
+
+PROMPT_MERGE_SITUATION = """你是法务专家助手，请将以下"业务情况说明"和"诉讼请求"整合为一段连贯的案件基本情况描述。
+
+要求：
+- 先概述案件背景和争议事实（来自业务情况说明）
+- 再列明诉讼请求具体内容（来自起诉状）
+- 保留关键金额、日期等数字信息，语言简洁
+- 不超过600字，不要添加标题或分节符号
+
+业务情况说明内容：
+{business_bg}
+
+诉讼请求内容：
+{litigation_claims}"""
+
 
 def _parse_json(raw: str) -> dict:
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
     raw = re.sub(r"\s*```$", "", raw)
     return json.loads(raw)
+
+
+_CASE_NO_RE = re.compile(r"[（(]\s*\d{4}\s*[）)]\s*[\u4e00-\u9fffA-Za-z0-9]{2,40}?号")
+
+
+def _normalize_case_no(value: str) -> str:
+    return (
+        str(value or "")
+        .replace("（", "(")
+        .replace("）", ")")
+        .replace("號", "号")
+        .replace("\u3000", "")
+        .strip()
+    )
+
+
+def _case_no_key(value: str) -> str:
+    return re.sub(r"\s+", "", _normalize_case_no(value))
+
+
+def _dedupe_case_numbers(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        normalized = _normalize_case_no(value)
+        key = _case_no_key(normalized)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(normalized)
+    return result
+
+
+def _extract_case_numbers_from_text(text: str) -> list[str]:
+    return _dedupe_case_numbers(_CASE_NO_RE.findall(text or ""))
+
+
+def _case_numbers_from_docs(docs: list | None) -> list[str]:
+    if not docs:
+        return []
+    numbers: list[str] = []
+    for doc in docs:
+        numbers.extend(_extract_case_numbers_from_text(doc.get("filename", "")))
+        numbers.extend(_extract_case_numbers_from_text(doc.get("text", "")))
+    return _dedupe_case_numbers(numbers)
+
+
+def _merge_situation_text(client, business_bg: str, litigation_claims: str) -> str:
+    """将业务情况说明背景与起诉状诉讼请求合并为连贯的基本情况描述。"""
+    if not business_bg:
+        return litigation_claims
+    if not litigation_claims:
+        return business_bg
+    prompt = (
+        PROMPT_MERGE_SITUATION
+        .replace("{business_bg}", business_bg[:3000])
+        .replace("{litigation_claims}", litigation_claims[:3000])
+    )
+    resp = client.chat.completions.create(
+        model=MODEL_CHAT,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1000, temperature=0.1,
+    )
+    return resp.choices[0].message.content.strip()
+
+
+def _extract_doc_fields(client, doc: dict) -> dict:
+    dtype = doc["doc_type"]
+    text = doc.get("text") or ""
+    if dtype in ("起诉状", "上诉状"):
+        prompt = PROMPT_SUSOSTATE.replace("{text}", text[:8000])
+        resp = client.chat.completions.create(
+            model=MODEL_CHAT,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2000, temperature=0.1,
+        )
+        return {"kind": "litigation", "dtype": dtype, "fields": _parse_json(resp.choices[0].message.content)}
+
+    if dtype == "业务情况说明":
+        prompt = PROMPT_BUSINESS_DESC.replace("{text}", text[:8000])
+        resp = client.chat.completions.create(
+            model=MODEL_CHAT,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=800, temperature=0.1,
+        )
+        return {"kind": "business", "dtype": dtype, "fields": _parse_json(resp.choices[0].message.content)}
+
+    if dtype in ("一审判决书", "二审判决书", "判决书", "裁定书", "再审申请书"):
+        text_for_prompt = (text[:5000] + "\n……（中间省略）……\n" + text[-3000:]) if len(text) > 8000 else text
+        prompt = PROMPT_JUDGMENT.replace("{text}", text_for_prompt)
+        resp = client.chat.completions.create(
+            model=MODEL_CHAT,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2000, temperature=0.1,
+        )
+        return {"kind": "judgment", "dtype": dtype, "fields": _parse_json(resp.choices[0].message.content)}
+
+    if dtype == "强制执行申请书":
+        prompt = PROMPT_EXECUTION.replace("{text}", text[:4000])
+        resp = client.chat.completions.create(
+            model=MODEL_CHAT,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200, temperature=0.1,
+        )
+        return {"kind": "execution", "dtype": dtype, "fields": _parse_json(resp.choices[0].message.content)}
+
+    return {"kind": "ignored", "dtype": dtype, "fields": {}}
 
 
 def extract_case_fields(docs: list, status_fn: Callable | None = None) -> dict:
@@ -159,83 +458,95 @@ def extract_case_fields(docs: list, status_fn: Callable | None = None) -> dict:
     }
     stage_order = {"一审": 1, "二审": 2, "再审": 3}
     stages_dict = {}
+    litigation_claims = ""
+    business_bg = ""
 
-    for doc in docs:
-        if not doc.get("text"):
-            continue
-        dtype = doc["doc_type"]
-        fname = doc["filename"]
+    docs_to_process = [
+        (idx, doc)
+        for idx, doc in enumerate(docs)
+        if doc.get("text") and doc.get("doc_type") != "其他"
+    ]
+
+    results_by_idx: dict[int, dict] = {}
+    if docs_to_process:
+        max_workers = min(max(1, LEDGER_LLM_CONCURRENCY), len(docs_to_process))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for idx, doc in docs_to_process:
+                if status_fn:
+                    status_fn(f"🤖 AI 抽取字段 [{doc['doc_type']}]：{doc['filename']}")
+                futures[executor.submit(_extract_doc_fields, client, doc)] = (idx, doc)
+            for future in as_completed(futures):
+                idx, doc = futures[future]
+                try:
+                    results_by_idx[idx] = future.result()
+                except Exception as e:
+                    if status_fn:
+                        status_fn(f"⚠️ [{doc['doc_type']}] {doc['filename']} 字段提取失败：{e}")
+
+    for idx in sorted(results_by_idx):
+        result = results_by_idx[idx]
+        kind = result["kind"]
+        fields = result["fields"]
+
+        if kind == "litigation":
+            if fields.get("案号"):
+                case["案号列表"].append(fields["案号"])
+            for k in ["案件名称", "案件发生时间", "案由", "诉讼主体", "主诉被诉"]:
+                if not case[k] and fields.get(k):
+                    case[k] = fields[k]
+            if case["标的金额"] is None and fields.get("标的金额") is not None:
+                case["标的金额"] = fields["标的金额"]
+            if not litigation_claims and fields.get("基本情况"):
+                litigation_claims = fields["基本情况"]
+
+        elif kind == "business":
+            if not business_bg and fields.get("业务背景"):
+                business_bg = fields["业务背景"]
+
+        elif kind == "judgment":
+            main_case_no = fields.get("本案案号") or ""
+            related_case_no = fields.get("关联案号") or ""
+            for no in [main_case_no, related_case_no]:
+                if no:
+                    case["案号列表"].append(no)
+            stage = (fields.get("审级") or "").strip()
+            if not stage and main_case_no:
+                if "民终" in main_case_no:
+                    stage = "二审"
+                elif "民初" in main_case_no:
+                    stage = "一审"
+                elif "民申" in main_case_no:
+                    stage = "再审"
+            result_text = (fields.get("处理结果") or "").strip()
+            if stage:
+                stages_dict[stage] = result_text or "（处理结果待补充）"
+            if not case["服务律所"] and fields.get("服务律所"):
+                case["服务律所"] = fields["服务律所"]
+            if fields.get("生效判决日期"):
+                case["生效判决日期"] = fields["生效判决日期"]
+
+        elif kind == "execution":
+            if not case["强制执行时间"] and fields.get("强制执行时间"):
+                case["强制执行时间"] = fields["强制执行时间"]
+
+    if business_bg:
         if status_fn:
-            status_fn(f"🤖 AI 抽取字段 [{dtype}]：{fname}")
-        if dtype == "其他":
-            continue
+            status_fn("🔀 合并业务情况说明与诉讼请求…")
         try:
-            if dtype in ("起诉状", "上诉状"):
-                prompt = PROMPT_SUSOSTATE.replace("{text}", doc["text"][:8000])
-                resp = client.chat.completions.create(
-                    model=MODEL_CHAT,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=2000, temperature=0.1,
-                )
-                fields = _parse_json(resp.choices[0].message.content)
-                if fields.get("案号"):
-                    case["案号列表"].append(fields["案号"])
-                for k in ["案件名称", "案件发生时间", "案由", "诉讼主体", "主诉被诉", "基本情况"]:
-                    if not case[k] and fields.get(k):
-                        case[k] = fields[k]
-                if case["标的金额"] is None and fields.get("标的金额") is not None:
-                    case["标的金额"] = fields["标的金额"]
-
-            elif dtype in ("一审判决书", "二审判决书", "判决书", "裁定书", "再审申请书"):
-                t = doc["text"]
-                text_for_prompt = (t[:5000] + "\n…（中间省略）…\n" + t[-3000:]) if len(t) > 8000 else t
-                prompt = PROMPT_JUDGMENT.replace("{text}", text_for_prompt)
-                resp = client.chat.completions.create(
-                    model=MODEL_CHAT,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=2000, temperature=0.1,
-                )
-                fields = _parse_json(resp.choices[0].message.content)
-                本案案号 = fields.get("本案案号") or ""
-                关联案号 = fields.get("关联案号") or ""
-                for n in [本案案号, 关联案号]:
-                    if n:
-                        case["案号列表"].append(n)
-                审级 = fields.get("审级", "").strip()
-                if not 审级 and 本案案号:
-                    if "民终" in 本案案号:
-                        审级 = "二审"
-                    elif "民初" in 本案案号:
-                        审级 = "一审"
-                    elif "民申" in 本案案号:
-                        审级 = "再审"
-                处理结果 = (fields.get("处理结果") or "").strip()
-                if 审级:
-                    stages_dict[审级] = 处理结果 or "（处理结果待补充）"
-                if not case["服务律所"] and fields.get("服务律所"):
-                    case["服务律所"] = fields["服务律所"]
-                if fields.get("生效判决日期"):
-                    case["生效判决日期"] = fields["生效判决日期"]
-
-            elif dtype == "强制执行申请书":
-                prompt = PROMPT_EXECUTION.replace("{text}", doc["text"][:4000])
-                resp = client.chat.completions.create(
-                    model=MODEL_CHAT,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=200, temperature=0.1,
-                )
-                fields = _parse_json(resp.choices[0].message.content)
-                if not case["强制执行时间"] and fields.get("强制执行时间"):
-                    case["强制执行时间"] = fields["强制执行时间"]
-
+            case["基本情况"] = _merge_situation_text(client, business_bg, litigation_claims)
         except Exception as e:
             if status_fn:
-                status_fn(f"⚠️ [{dtype}] {fname} 字段提取失败：{e}")
+                status_fn(f"⚠️ 合并基本情况失败，使用原始内容：{e}")
+            case["基本情况"] = "\n\n".join(filter(None, [business_bg, litigation_claims]))
+    else:
+        case["基本情况"] = litigation_claims
 
     case["stages"] = [
         {"审级": k, "处理结果": v}
         for k, v in sorted(stages_dict.items(), key=lambda x: stage_order.get(x[0], 9))
     ]
+    case["案号列表"] = _dedupe_case_numbers(case["案号列表"] + _case_numbers_from_docs(docs))
     return case
 
 
@@ -260,10 +571,19 @@ def save_cases_json(cases: list):
 def find_matching_case_idx(new_case: dict, existing_cases: list, docs: list = None):
     if not existing_cases:
         return None
-    new_nums = set(filter(None, new_case.get("案号列表", [])))
+    new_nums = {
+        _case_no_key(no)
+        for no in (new_case.get("案号列表", []) + _case_numbers_from_docs(docs))
+        if _case_no_key(no)
+    }
     if new_nums:
         for i, c in enumerate(existing_cases):
-            if new_nums & set(filter(None, c.get("案号列表", []))):
+            existing_nums = {
+                _case_no_key(no)
+                for no in c.get("案号列表", [])
+                if _case_no_key(no)
+            }
+            if new_nums & existing_nums:
                 return i
 
     new_lines = []
@@ -308,8 +628,7 @@ def merge_case_data(existing: dict, new_data: dict) -> dict:
             result[field] = new_data[field]
     if result.get("标的金额") is None and new_data.get("标的金额") is not None:
         result["标的金额"] = new_data["标的金额"]
-    result["案号列表"] = list(set(result.get("案号列表", []) + new_data.get("案号列表", [])))
-    result["案号列表"] = [n for n in result["案号列表"] if n]
+    result["案号列表"] = _dedupe_case_numbers(result.get("案号列表", []) + new_data.get("案号列表", []))
     for field in ["生效判决日期", "强制执行时间", "服务律所"]:
         if new_data.get(field):
             result[field] = new_data[field]

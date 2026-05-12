@@ -2,6 +2,13 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.18',
+    date: '2026-05-12',
+    changes: [
+      { type: 'perf', text: '扫描件 OCR 引擎升级：案件台账、合规审查、授权委托三个模块的扫描版 PDF 识别，由视觉大模型切换为中航信专用 OCR 服务，速度更快、识别更稳定、不消耗视觉模型 Token；服务不可用时自动降级回视觉模型，不影响正常使用' },
+    ],
+  },
+  {
     version: 'v2.17',
     date: '2026-05-11',
     changes: [

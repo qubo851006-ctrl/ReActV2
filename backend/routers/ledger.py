@@ -3,6 +3,7 @@ import os
 import json
 import shutil
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator, Any
@@ -20,7 +21,8 @@ from file_store import atomic_write_bytes, file_lock
 
 from config import LEDGER_JSON_PATH, LEDGER_EXCEL_PATH, LEDGER_OUTPUT_DIR
 from ledger_helpers import (
-    extract_file_text, ocr_pdf_with_vision, detect_doc_type_by_content,
+    extract_file_text, render_pdf_pages, ocr_single_page,
+    detect_doc_type_by_content,
     extract_case_fields, load_cases_json, save_cases_json,
     find_matching_case_idx, merge_case_data, archive_legal_docs,
     validate_legal_upload,
@@ -48,6 +50,11 @@ async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str 
         files_data.append({"name": safe_name, "bytes": b, "content_type": f.content_type})
 
     async def event_stream() -> AsyncGenerator[str, None]:
+        overall_start = time.perf_counter()
+
+        def used_since(start: float) -> str:
+            return f"{time.perf_counter() - start:.1f}s"
+
         def send(msg: str) -> str:
             return f"data: {json.dumps({'log': msg}, ensure_ascii=False)}\n\n"
 
@@ -55,30 +62,45 @@ async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str 
         docs = []
         for fd in files_data:
             yield send(f"**Step 1** 📄 提取文字：`{fd['name']}`")
+            text_start = time.perf_counter()
             text = await asyncio.to_thread(extract_file_text, fd["bytes"], fd["name"])
+            yield send(f"→ 提取到 **{len(text)}** 字符，用时 {used_since(text_start)}")
             if not text:
                 yield send("→ 扫描件，启动视觉 OCR…")
                 try:
-                    text = await asyncio.to_thread(ocr_pdf_with_vision, fd["bytes"], vision_model)
+                    ocr_start = time.perf_counter()
+                    pages = await asyncio.to_thread(render_pdf_pages, fd["bytes"])
+                    yield send(f"→ 共 **{len(pages)}** 页，逐页识别中…")
+                    page_texts: list[str] = []
+                    for i, img_b64 in enumerate(pages):
+                        page_text = await asyncio.to_thread(ocr_single_page, img_b64, vision_model)
+                        page_texts.append(page_text)
+                        yield send(f"→ 第 {i + 1}/{len(pages)} 页完成")
+                    text = "\n".join(t for t in page_texts if t)
+                    yield send(f"→ OCR 提取到 **{len(text)}** 字符，用时 {used_since(ocr_start)}")
                 except Exception as e:
                     text = ""
                     yield send(f"⚠️ OCR 失败：{e}")
-            yield send(f"→ 提取到 **{len(text)}** 字符")
+            type_start = time.perf_counter()
             doc_type = await asyncio.to_thread(detect_doc_type_by_content, text) if text else "其他"
-            yield send(f"→ 文书类型：**{doc_type}**")
+            yield send(f"→ 文书类型：**{doc_type}**，用时 {used_since(type_start)}")
             docs.append({"filename": fd["name"], "text": text, "doc_type": doc_type})
 
         # Step 2: AI 提取字段（阻塞 LLM 调用卸载到线程池）
         yield send("**Step 2** 🤖 AI 抽取案件字段…")
+        fields_start = time.perf_counter()
         new_case = await asyncio.to_thread(extract_case_fields, docs, lambda m: None)
+        yield send(f"→ AI 字段提取完成，用时 {used_since(fields_start)}")
         yield send(f"→ 案件名称：**{new_case.get('案件名称') or '（未提取到）'}**")
         yield send(f"→ 案由：**{new_case.get('案由') or '（未提取到）'}**")
         yield send(f"→ 标的金额：**{new_case.get('标的金额') or '（未提取到）'}**")
 
         # Step 3: 比对台账（可能含 LLM 调用，卸载到线程池）
         yield send("**Step 3** 🔍 比对现有台账…")
+        match_start = time.perf_counter()
         existing_cases = await asyncio.to_thread(load_cases_json)
         match_idx = await asyncio.to_thread(find_matching_case_idx, new_case, existing_cases, docs)
+        yield send(f"→ 台账匹配完成，用时 {used_since(match_start)}")
         yield send(f"→ {'匹配到第 ' + str(match_idx + 1) + ' 条记录' if match_idx is not None else '未匹配，将新增'}")
 
         # Step 4: 准备预览数据（合并但不保存）
@@ -98,10 +120,11 @@ async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str 
 
         # Step 5: 归档文书（文件 I/O 卸载到线程池）
         yield send("📁 归档文书文件…")
+        archive_start = time.perf_counter()
         archive_dir = await asyncio.to_thread(archive_legal_docs, files_data, docs, case_name)
-        yield send(f"→ 已归档至：`{archive_dir}`")
+        yield send(f"→ 已归档至：`{archive_dir}`，用时 {used_since(archive_start)}")
 
-        yield send("✅ 提取完成，等待确认…")
+        yield send(f"✅ 提取完成，总用时 {used_since(overall_start)}，等待确认…")
 
         preview_payload = {
             "preview": True,
