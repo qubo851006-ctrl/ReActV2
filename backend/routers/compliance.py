@@ -1,4 +1,7 @@
 import asyncio
+import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +14,11 @@ from audit_log import write_log
 from auth_utils import get_current_user, require_admin
 from config import COMPLIANCE_LEDGER_EXCEL_PATH, COMPLIANCE_LEDGER_JSON_PATH
 from db import get_db
-from file_store import file_lock
+from file_store import atomic_write_bytes, atomic_write_text, file_lock
 from models import User
 from routers.chat import load_history, save_history
 from upload_validation import UploadValidationError, validate_pdf_upload
 from utils.compliance_ledger import (
-    append_record,
     create_compliance_workbook,
     extract_compliance_item,
     extract_pdf_text,
@@ -96,9 +98,39 @@ def write_compliance(
     record = normalize_extracted_item(body_data)
     txn_lock = Path(COMPLIANCE_LEDGER_JSON_PATH).with_suffix(".txn")
     with file_lock(txn_lock):
-        records = append_record(record, COMPLIANCE_LEDGER_JSON_PATH)
-        create_compliance_workbook(records, COMPLIANCE_LEDGER_EXCEL_PATH)
-        sequence = records[-1].get("sequence", len(records))
+        json_path = Path(COMPLIANCE_LEDGER_JSON_PATH)
+        excel_path = Path(COMPLIANCE_LEDGER_EXCEL_PATH)
+        old_json = json_path.read_bytes() if json_path.exists() else None
+        old_excel = excel_path.read_bytes() if excel_path.exists() else None
+        tmp_excel = None
+        try:
+            records = load_records(json_path)
+            next_record = dict(record)
+            next_record["sequence"] = len(records) + 1
+            records.append(next_record)
+            excel_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", dir=str(excel_path.parent), delete=False) as tmp:
+                tmp_excel = tmp.name
+            create_compliance_workbook(records, tmp_excel)
+            atomic_write_text(json_path, json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+            Path(tmp_excel).replace(excel_path)
+            sequence = records[-1].get("sequence", len(records))
+        except Exception as e:
+            if tmp_excel and os.path.exists(tmp_excel):
+                try:
+                    os.unlink(tmp_excel)
+                except OSError:
+                    pass
+            if old_json is not None:
+                atomic_write_bytes(json_path, old_json)
+            elif json_path.exists():
+                json_path.unlink()
+            if old_excel is not None:
+                atomic_write_bytes(excel_path, old_excel)
+            elif excel_path.exists():
+                excel_path.unlink()
+            write_log(db, user, "compliance_write_failed", f"合规审查台账写入失败：{e}", request)
+            raise HTTPException(status_code=500, detail=f"合规审查台账写入失败：{e}")
 
     reply = f"✅ 合规审查工作台账已更新！已新增第 {sequence} 项：{record.get('title', '')}"
     if body.session_id:

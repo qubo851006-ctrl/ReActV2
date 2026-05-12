@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 import time as _time
 from datetime import datetime, timezone
@@ -248,14 +249,15 @@ def load_sessions(user_id: int) -> list:
         return []
 
 def save_sessions(sessions: list, user_id: int):
+    path = _sessions_path(user_id)
     try:
-        path = _sessions_path(user_id)
         with file_lock(path):
             atomic_write_text(path, json.dumps(sessions, ensure_ascii=False, indent=2), encoding="utf-8")
     except HTTPException:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.exception("Failed to save sessions for user %s", user_id)
+        raise RuntimeError(f"保存会话列表失败：{exc}") from exc
 
 def load_history(user_id: int, session_id: str) -> list:
     if not session_id:
@@ -289,8 +291,9 @@ def save_history(messages: list, user_id: int, session_id: str):
         save_sessions(sessions, user_id)
     except HTTPException:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.exception("Failed to save chat history for user %s session %s", user_id, session_id)
+        raise RuntimeError(f"保存会话历史失败：{exc}") from exc
 
 def _create_session(user_id: int) -> dict:
     session_id = f"sess_{int(_time.time() * 1000)}"

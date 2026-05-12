@@ -294,7 +294,7 @@ def init_auth_ledger(ledger_path):
 
 
 def record_to_ledger(info, title, ledger_path):
-    """向台账 Excel 追加一行，失败静默处理。"""
+    """向台账 Excel 追加一行，失败时抛出异常，避免用户误以为已记录。"""
     try:
         import openpyxl
         from openpyxl.styles import Alignment as XlAlign
@@ -347,8 +347,10 @@ def record_to_ledger(info, title, ledger_path):
                     cell.fill = PatternFill(fill_type="solid", fgColor="DCE6F1")
             atomic_save_workbook(wb, ledger_path)
         return True
-    except Exception:
-        return False
+    except Exception as exc:
+        import logging
+        logging.exception("record_to_ledger failed: %s", ledger_path)
+        raise RuntimeError(f"授权台账写入失败：{exc}") from exc
 
 
 def _set_run_font(run, cn_font, size_pt):

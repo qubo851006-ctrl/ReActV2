@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -74,6 +75,106 @@ class FileStoreTests(unittest.TestCase):
             self.assertEqual(safe_child_path(base, "sess_abc.json").parent, base.resolve())
             with self.assertRaises(ValueError):
                 safe_child_path(base, "..", "escape.json")
+
+
+class AuthSecurityTests(unittest.TestCase):
+    def test_cookie_secure_flag_can_be_enabled_by_environment(self):
+        from routers import auth
+
+        with patch.dict("os.environ", {"SESSION_COOKIE_SECURE": "true"}):
+            self.assertTrue(auth._cookie_secure_enabled())
+        with patch.dict("os.environ", {"SESSION_COOKIE_SECURE": "false"}):
+            self.assertFalse(auth._cookie_secure_enabled())
+
+    def test_login_attempt_limiter_blocks_repeated_failures(self):
+        from routers import auth
+
+        auth._LOGIN_FAILURES.clear()
+        now = datetime.now(timezone.utc)
+        with patch("routers.auth._utcnow", return_value=now):
+            for _ in range(auth.LOGIN_MAX_FAILURES):
+                self.assertFalse(auth._login_is_limited(1, "127.0.0.1"))
+                auth._record_login_failure(1, "127.0.0.1")
+            self.assertTrue(auth._login_is_limited(1, "127.0.0.1"))
+
+        later = now + timedelta(seconds=auth.LOGIN_WINDOW_SECONDS + 1)
+        with patch("routers.auth._utcnow", return_value=later):
+            self.assertFalse(auth._login_is_limited(1, "127.0.0.1"))
+
+
+class LedgerMergeIsolationTests(unittest.TestCase):
+    def test_user_merge_outputs_are_isolated_by_result_id(self):
+        from routers import ledger_merge
+
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            with patch.object(ledger_merge, "MERGED_DIR", Path(tmpdir)):
+                path_a = ledger_merge._result_file_for(1, "merge_aaaaaaaa")
+                path_b = ledger_merge._result_file_for(2, "merge_aaaaaaaa")
+
+            self.assertNotEqual(path_a, path_b)
+            self.assertIn("user_1", str(path_a))
+            self.assertIn("user_2", str(path_b))
+
+    def test_merge_result_id_rejects_path_traversal(self):
+        from routers import ledger_merge
+
+        with self.assertRaises(ValueError):
+            ledger_merge._validate_result_id("../escape")
+
+
+class PendingArchiveTests(unittest.TestCase):
+    def test_ledger_extract_only_commits_archive_after_confirmation(self):
+        from routers import ledger
+
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            with patch.object(ledger, "_PENDING_UPLOAD_ROOT", Path(tmpdir)), \
+                 patch("routers.ledger.archive_legal_docs", return_value="archive-dir") as archive_mock:
+                pending_id = ledger._create_pending_upload(
+                    7,
+                    [{"name": "case.pdf", "bytes": b"%PDF"}],
+                    [{"doc_type": "判决书"}],
+                )
+                pending_dir = ledger._pending_dir_for(7, pending_id)
+
+                self.assertTrue(pending_dir.exists())
+                archive_mock.assert_not_called()
+
+                archive_dir = ledger._commit_pending_archive(7, pending_id, "测试案件")
+
+            self.assertEqual(archive_dir, "archive-dir")
+            self.assertFalse(pending_dir.exists())
+            archive_mock.assert_called_once()
+
+    def test_training_extract_only_commits_archive_after_confirmation(self):
+        from routers import training
+
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            with patch.object(training, "_TRAINING_PENDING_ROOT", Path(tmpdir)), \
+                 patch("utils.archiver.archive_files", return_value="training-archive") as archive_mock:
+                pending_id = training._create_training_pending_upload(
+                    "notice.pdf",
+                    b"%PDF",
+                    "signin.png",
+                    b"\x89PNG\r\n\x1a\n",
+                )
+                pending_dir = training._training_pending_dir(pending_id)
+
+                self.assertTrue(pending_dir.exists())
+                archive_mock.assert_not_called()
+
+                archive_dir = training._archive_pending_training_upload(
+                    pending_id,
+                    "合规培训",
+                    "2026-05-12",
+                    "测试培训",
+                )
+
+            self.assertEqual(archive_dir, "training-archive")
+            self.assertFalse(pending_dir.exists())
+            archive_mock.assert_called_once()
 
 
 class LlmClientTests(unittest.TestCase):

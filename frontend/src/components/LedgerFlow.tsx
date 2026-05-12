@@ -55,8 +55,8 @@ export default function LedgerFlow({ onComplete, onCancel, visionModel = '' }: P
     if (!preview || !editedCase) return
     setWriting(true)
     try {
-      const res = await writeLedger(editedCase, preview.match_idx, preview.archive_dir)
-      setDoneResult({ case_count: res.case_count, archive_dir: preview.archive_dir })
+      const res = await writeLedger(editedCase, preview.match_idx, preview.archive_dir, preview.pending_archive_id ?? '')
+      setDoneResult({ case_count: res.case_count, archive_dir: res.archive_dir || preview.archive_dir })
       setStep('done')
       onComplete(res.reply)
     } catch (e: unknown) {

@@ -50,6 +50,7 @@ export default function TrainingFlow({ onComplete, onCancel, visionModel = '' }:
         count: edited.count,
         category: edited.category,
         archive_path: edited.archive_path,
+        pending_upload_id: edited.pending_upload_id,
         start_time: edited.start_time,
         end_time: edited.end_time,
         duration_hours: edited.duration_hours,

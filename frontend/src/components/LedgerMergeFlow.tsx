@@ -105,7 +105,7 @@ export default function LedgerMergeFlow({ onComplete, onCancel }: Props) {
   }
 
   function handleDownload() {
-    downloadMergedExcel()
+    downloadMergedExcel(stats?.result_id ?? '')
     const hasPurchase = !!purchaseFile
     const hasFinance = !!financeFile
     const parts = ['合同系统']
@@ -132,7 +132,7 @@ export default function LedgerMergeFlow({ onComplete, onCancel }: Props) {
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={downloadMergedExcel}
+            onClick={() => downloadMergedExcel()}
             className="text-xs text-emerald-300 hover:text-emerald-200 whitespace-nowrap"
           >
             下载已有台账

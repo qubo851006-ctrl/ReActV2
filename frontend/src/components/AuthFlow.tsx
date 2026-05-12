@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { processAuthRequest, downloadDocx, getErrorMessage } from '../api'
+import { processAuthRequest, recordAuthRequestLedger, downloadDocx, getErrorMessage } from '../api'
 
 function downloadXlsx(base64: string, filename: string) {
   const bytes = atob(base64)
@@ -33,6 +33,8 @@ interface AuthResult {
   ledger_updated: boolean
   ledger_base64: string | null
   ledger_filename: string | null
+  title: string
+  info: unknown
 }
 
 export default function AuthFlow({ onComplete, onCancel, visionModel = '' }: Props) {
@@ -42,6 +44,7 @@ export default function AuthFlow({ onComplete, onCancel, visionModel = '' }: Pro
   const [error, setError] = useState('')
   const [drag, setDrag] = useState(false)
   const [activeTab, setActiveTab] = useState<'request' | 'letter'>('request')
+  const [recordingLedger, setRecordingLedger] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   async function handleProcess() {
@@ -55,6 +58,25 @@ export default function AuthFlow({ onComplete, onCancel, visionModel = '' }: Pro
       setError(getErrorMessage(e, '处理失败'))
     } finally {
       setProcessing(false)
+    }
+  }
+
+  async function handleRecordLedger() {
+    if (!result) return
+    setRecordingLedger(true)
+    setError('')
+    try {
+      const ledger = await recordAuthRequestLedger(result.info, result.title)
+      setResult({
+        ...result,
+        ledger_updated: ledger.ledger_updated,
+        ledger_base64: ledger.ledger_base64,
+        ledger_filename: ledger.ledger_filename,
+      })
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '台账记录失败'))
+    } finally {
+      setRecordingLedger(false)
     }
   }
 
@@ -81,6 +103,7 @@ export default function AuthFlow({ onComplete, onCancel, visionModel = '' }: Pro
             <span className="ml-2 text-xs text-slate-400">（已记录台账）</span>
           )}
         </div>
+        {error && <div className="text-red-400 text-sm mb-3">❌ {error}</div>}
 
         {/* 标签切换 */}
         <div className="flex gap-1 mb-3 border-b border-slate-700">
@@ -131,6 +154,15 @@ export default function AuthFlow({ onComplete, onCancel, visionModel = '' }: Pro
           >
             📥 下载授权书
           </button>
+          {!result.ledger_updated && (
+            <button
+              onClick={handleRecordLedger}
+              disabled={recordingLedger}
+              className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+            >
+              {recordingLedger ? '记录中…' : '📊 记录授权台账'}
+            </button>
+          )}
           {result.ledger_updated && result.ledger_base64 && result.ledger_filename && (
             <button
               onClick={() => downloadXlsx(result.ledger_base64!, result.ledger_filename!)}

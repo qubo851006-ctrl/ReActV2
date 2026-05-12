@@ -46,6 +46,7 @@ export interface TrainingResult {
   count: number
   category: string
   archive_path: string
+  pending_upload_id?: string
   excel_path: string
   confidence: 'high' | 'low'
   reflection_note: string
@@ -80,5 +81,6 @@ export interface LedgerPreview {
   is_new: boolean
   action_text: string
   archive_dir: string
+  pending_archive_id?: string
   existing_count: number
 }

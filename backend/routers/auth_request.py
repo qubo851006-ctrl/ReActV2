@@ -4,6 +4,7 @@ import io
 import base64
 import tempfile
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
+from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 
 from auth_utils import get_current_user
@@ -15,6 +16,12 @@ from config import AUTH_LEDGER_PATH
 from upload_validation import UploadValidationError, validate_pdf_upload
 
 router = APIRouter(prefix="/api/auth-request", tags=["auth-request"])
+
+
+class AuthLedgerRecordRequest(BaseModel):
+    info: dict
+    title: str
+    session_id: str = ""
 
 
 @router.post("/process")
@@ -34,7 +41,6 @@ async def process_auth_request(
         draft_auth_letter,
         save_as_docx,
         save_auth_letter_as_docx,
-        record_to_ledger,
     )
     from ledger_helpers import ocr_pdf_with_vision
     import pdfplumber
@@ -89,15 +95,6 @@ async def process_auth_request(
             project_name[:15] if len(project_name) > 15 else project_name
         )
 
-        # 记录台账
-        ledger_updated = record_to_ledger(info, title, AUTH_LEDGER_PATH)
-        ledger_b64 = None
-        ledger_filename = None
-        if ledger_updated:
-            with open(AUTH_LEDGER_PATH, "rb") as f:
-                ledger_b64 = base64.b64encode(f.read()).decode()
-            ledger_filename = os.path.basename(AUTH_LEDGER_PATH)
-
         return {
             "info": info,
             "auth_content": auth_content,
@@ -105,9 +102,7 @@ async def process_auth_request(
             "docx_b64": docx_b64,
             "letter_b64": letter_b64,
             "project_name": project_name,
-            "ledger_updated": ledger_updated,
-            "ledger_b64": ledger_b64,
-            "ledger_filename": ledger_filename,
+            "title": title,
         }
 
     result = await asyncio.to_thread(_run_blocking)
@@ -128,8 +123,39 @@ async def process_auth_request(
         "letter_content": result["letter_content"],
         "letter_base64": result["letter_b64"],
         "letter_filename": "授权书_{}.docx".format(project_name[:20]),
-        "ledger_updated": result["ledger_updated"],
-        "ledger_base64": result["ledger_b64"],
-        "ledger_filename": result["ledger_filename"],
+        "ledger_updated": False,
+        "ledger_base64": None,
+        "ledger_filename": None,
+        "title": result["title"],
         "info": info,
+    }
+
+
+@router.post("/record-ledger")
+def record_auth_ledger(
+    body: AuthLedgerRecordRequest,
+    request: Request,
+    db: DBSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from utils.auth_request_drafter import record_to_ledger
+
+    ledger_updated = record_to_ledger(body.info, body.title, AUTH_LEDGER_PATH)
+    ledger_b64 = None
+    ledger_filename = None
+    if ledger_updated:
+        with open(AUTH_LEDGER_PATH, "rb") as f:
+            ledger_b64 = base64.b64encode(f.read()).decode()
+        ledger_filename = os.path.basename(AUTH_LEDGER_PATH)
+    write_log(db, user, "auth_request_ledger_write", f"记录授权台账：{body.title}", request)
+    reply = f"✅ 授权委托台账已记录：{body.title}"
+    if body.session_id:
+        history = load_history(user.id, body.session_id)
+        history.append({"role": "assistant", "content": reply})
+        save_history(history, user.id, body.session_id)
+    return {
+        "ledger_updated": ledger_updated,
+        "ledger_base64": ledger_b64,
+        "ledger_filename": ledger_filename,
+        "reply": reply,
     }

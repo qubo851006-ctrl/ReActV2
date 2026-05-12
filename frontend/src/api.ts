@@ -192,11 +192,18 @@ export async function writeLedger(
   caseData: LedgerCaseData,
   matchIdx: number | null,
   archiveDir: string,
-): Promise<{ ok: boolean; case_count: number; reply: string }> {
+  pendingArchiveId = '',
+): Promise<{ ok: boolean; case_count: number; reply: string; archive_dir: string }> {
   const r = await apiFetch(`${BASE}/ledger/write`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ case_data: caseData, match_idx: matchIdx, archive_dir: archiveDir, session_id: _sid }),
+    body: JSON.stringify({
+      case_data: caseData,
+      match_idx: matchIdx,
+      archive_dir: archiveDir,
+      pending_archive_id: pendingArchiveId,
+      session_id: _sid,
+    }),
   })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
@@ -275,6 +282,7 @@ export async function updateComplianceResponsiblePersons(persons: Record<string,
 // ── 三台账合并 ────────────────────────────────────────────────
 
 export interface MergeStats {
+  result_id?: string
   total_contract: number
   matched_purchase: number
   matched_finance: number
@@ -297,8 +305,9 @@ export async function mergeLedgers(
   return r.json()
 }
 
-export function downloadMergedExcel() {
-  window.open(`${BASE}/ledger-merge/download`, '_blank')
+export function downloadMergedExcel(resultId = '') {
+  const suffix = resultId ? `?result_id=${encodeURIComponent(resultId)}` : ''
+  window.open(`${BASE}/ledger-merge/download${suffix}`, '_blank')
 }
 
 // ── 审计分析 ──────────────────────────────────────────────────
@@ -358,6 +367,16 @@ export async function processAuthRequest(pdfFile: File, visionModel: string) {
   form.append('session_id', _sid)
   form.append('vision_model', visionModel)
   const r = await apiFetch(`${BASE}/auth-request/process`, { method: 'POST', body: form })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function recordAuthRequestLedger(info: unknown, title: string) {
+  const r = await apiFetch(`${BASE}/auth-request/record-ledger`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ info, title, session_id: _sid }),
+  })
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }

@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -208,6 +209,44 @@ class ComplianceLedgerPersistenceTests(unittest.TestCase):
 
             self.assertEqual([r["sequence"] for r in records], [1, 2])
             self.assertEqual(records[1]["title"], "事项二")
+
+    def test_write_compliance_rolls_back_json_when_workbook_generation_fails(self):
+        from routers.compliance import ComplianceWriteRequest, write_compliance
+
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            json_path = Path(tmpdir) / "records.json"
+            excel_path = Path(tmpdir) / "ledger.xlsx"
+            json_path.write_text(json.dumps([{
+                "sequence": 1,
+                "title": "旧事项",
+                "procedure": "董事会审议",
+                "undertaking_department": "法务合规部",
+                "background_materials": [],
+                "review_rows": [],
+            }], ensure_ascii=False), encoding="utf-8")
+            excel_path.write_bytes(b"old-excel")
+
+            body = ComplianceWriteRequest(
+                title="新事项",
+                procedure="董事会审议",
+                undertaking_department="法务合规部",
+                background_materials=[],
+                review_rows=[],
+            )
+            fake_db = type("DB", (), {"add": lambda *_: None, "commit": lambda *_: None})()
+            fake_user = type("User", (), {"id": 1})()
+
+            with patch("routers.compliance.COMPLIANCE_LEDGER_JSON_PATH", str(json_path)), \
+                 patch("routers.compliance.COMPLIANCE_LEDGER_EXCEL_PATH", str(excel_path)), \
+                 patch("routers.compliance.create_compliance_workbook", side_effect=RuntimeError("boom")), \
+                 patch("routers.compliance.write_log"):
+                with self.assertRaises(Exception):
+                    write_compliance(body, request=None, db=fake_db, user=fake_user)
+
+            records = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual([r["title"] for r in records], ["旧事项"])
+            self.assertEqual(excel_path.read_bytes(), b"old-excel")
 
 
 class ComplianceLedgerModelTests(unittest.TestCase):

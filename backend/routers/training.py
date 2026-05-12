@@ -1,8 +1,11 @@
 import asyncio
 import os
 import re
+import secrets
+import shutil
 import tempfile
 from datetime import datetime
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -14,8 +17,48 @@ from db import get_db
 from models import User
 from routers.chat import load_history, save_history
 from upload_validation import UploadValidationError, validate_image_upload, validate_pdf_upload
+from config import DATA_ROOT
+from file_store import atomic_write_bytes, safe_child_path
 
 router = APIRouter(prefix="/api/training", tags=["training"])
+_TRAINING_PENDING_ROOT = Path(DATA_ROOT) / "_pending_training_uploads"
+_TRAINING_PENDING_PREFIX = "training_"
+
+
+def _training_pending_dir(pending_id: str) -> Path:
+    if not pending_id.startswith(_TRAINING_PENDING_PREFIX) or not pending_id.replace("_", "").replace("-", "").isalnum():
+        raise ValueError("无效的培训暂存编号")
+    return safe_child_path(_TRAINING_PENDING_ROOT, pending_id)
+
+
+def _create_training_pending_upload(notice_name: str, notice_bytes: bytes, signin_name: str, signin_bytes: bytes) -> str:
+    pending_id = f"{_TRAINING_PENDING_PREFIX}{secrets.token_urlsafe(12)}"
+    pending_dir = _training_pending_dir(pending_id)
+    pending_dir.mkdir(parents=True, exist_ok=False)
+    atomic_write_bytes(pending_dir / f"notice{Path(notice_name).suffix.lower() or '.pdf'}", notice_bytes)
+    atomic_write_bytes(pending_dir / f"signin{Path(signin_name).suffix.lower() or '.img'}", signin_bytes)
+    return pending_id
+
+
+def _archive_pending_training_upload(pending_id: str, category: str, date: str, topic: str) -> str:
+    from utils.archiver import archive_files
+
+    pending_dir = _training_pending_dir(pending_id)
+    if not pending_dir.exists():
+        raise ValueError("培训暂存文件不存在或已过期")
+    notice_files = list(pending_dir.glob("notice.*"))
+    signin_files = list(pending_dir.glob("signin.*"))
+    if not notice_files or not signin_files:
+        raise ValueError("培训暂存文件不完整")
+    archive_path = archive_files(
+        notice_path=str(notice_files[0]),
+        sign_in_path=str(signin_files[0]),
+        category=category,
+        date=date,
+        topic=topic,
+    )
+    shutil.rmtree(pending_dir, ignore_errors=True)
+    return archive_path
 
 
 def _calc_duration_hours(start: str, end: str, days: int) -> float:
@@ -126,7 +169,6 @@ def _run_training_extraction(
     from utils.pdf_reader import extract_pdf_text
     from utils.image_analyzer import count_attendees
     from utils.classifier import classify_training
-    from utils.archiver import archive_files
     from utils.excel_writer import EXCEL_PATH
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -141,13 +183,7 @@ def _run_training_extraction(
         sign_in_info = count_attendees(signin_path, model=vision_model)
         category = classify_training(notice_text, sign_in_info["topic"])
         time_info = _extract_training_time(notice_text)
-        archive_path = archive_files(
-            notice_path=notice_path,
-            sign_in_path=signin_path,
-            category=category,
-            date=sign_in_info["date"],
-            topic=sign_in_info["topic"],
-        )
+        pending_upload_id = _create_training_pending_upload(notice_name, notice_bytes, signin_name, signin_bytes)
 
     return {
         "topic": sign_in_info["topic"] or "",
@@ -158,7 +194,8 @@ def _run_training_extraction(
         "start_time": time_info["start_time"],
         "end_time": time_info["end_time"],
         "duration_hours": time_info["duration_hours"],
-        "archive_path": archive_path,
+        "archive_path": "",
+        "pending_upload_id": pending_upload_id,
         "excel_path": EXCEL_PATH,
         "confidence": sign_in_info.get("confidence", "high"),
         "reflection_note": sign_in_info.get("reflection_note", ""),
@@ -205,6 +242,7 @@ class TrainingWriteRequest(BaseModel):
     count: int
     category: str
     archive_path: str
+    pending_upload_id: str = ""
     start_time: str = ""
     end_time: str = ""
     duration_hours: float = 0.0
@@ -223,6 +261,10 @@ def write_training(
     """
     from utils.excel_writer import append_record, EXCEL_PATH
 
+    archive_path = req.archive_path
+    if req.pending_upload_id:
+        archive_path = _archive_pending_training_upload(req.pending_upload_id, req.category, req.date, req.topic)
+
     append_record(
         date=req.date,
         topic=req.topic,
@@ -231,7 +273,7 @@ def write_training(
         count=req.count,
         duration_hours=req.duration_hours,
         category=req.category,
-        archive_path=req.archive_path,
+        archive_path=archive_path,
     )
 
     duration_display = f"{req.duration_hours} 课时" if req.duration_hours > 0 else "未填写"
@@ -245,7 +287,7 @@ def write_training(
         f"| 参与人数 | **{req.count} 人** |\n"
         f"| 培训时长 | {duration_display} |\n"
         f"| 培训类别 | {req.category} |\n"
-        f"| 归档路径 | `{req.archive_path}` |"
+        f"| 归档路径 | `{archive_path}` |"
     )
     write_log(db, user, "training_write", f"写入培训记录：{req.topic}", request)
     history = load_history(user.id, req.session_id)

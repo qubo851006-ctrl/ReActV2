@@ -2,6 +2,16 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.21',
+    date: '2026-05-12',
+    changes: [
+      { type: 'fix', text: '安全与隔离增强：三台账合并结果改为按当前用户和本次结果编号隔离保存，下载时优先下载本次合并结果，避免多人使用时互相覆盖' },
+      { type: 'fix', text: '预览流程副作用收敛：案件台账、培训统计先暂存上传文件，用户确认写入后才正式归档；授权请示生成后由用户单独点击记录授权台账' },
+      { type: 'fix', text: '关键落盘失败显式报错：会话历史、授权台账、合规审查台账写入失败时不再静默吞掉异常，合规台账 JSON 与 Excel 写入失败会回滚旧文件' },
+      { type: 'fix', text: '登录与前端稳定性修复：短码连续输错增加限速保护，生产环境可通过 SESSION_COOKIE_SECURE 启用 Secure Cookie，并修复 App 会话消息依赖导致的 lint 警告' },
+    ],
+  },
+  {
     version: 'v2.20',
     date: '2026-05-12',
     changes: [

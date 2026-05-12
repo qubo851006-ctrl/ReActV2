@@ -1,6 +1,7 @@
 import asyncio
 import os
 import json
+import secrets
 import shutil
 import tempfile
 import time
@@ -17,7 +18,7 @@ from auth_utils import get_current_user, require_admin
 from audit_log import write_log
 from db import get_db
 from models import User
-from file_store import atomic_write_bytes, file_lock
+from file_store import atomic_write_bytes, atomic_write_text, file_lock, safe_child_path
 
 from config import LEDGER_JSON_PATH, LEDGER_EXCEL_PATH, LEDGER_OUTPUT_DIR
 from ledger_helpers import (
@@ -31,11 +32,63 @@ from routers.chat import load_history, save_history
 
 router = APIRouter(prefix="/api/ledger", tags=["ledger"])
 
+_PENDING_UPLOAD_ROOT = Path(LEDGER_OUTPUT_DIR) / "_pending_uploads"
+_PENDING_ID_PREFIX = "pending_"
+
+
+def _pending_user_dir(user_id: int) -> Path:
+    return _PENDING_UPLOAD_ROOT / f"user_{user_id}"
+
+
+def _pending_dir_for(user_id: int, pending_id: str) -> Path:
+    if not pending_id.startswith(_PENDING_ID_PREFIX) or not pending_id.replace("_", "").replace("-", "").isalnum():
+        raise ValueError("无效的待归档编号")
+    return safe_child_path(_pending_user_dir(user_id), pending_id)
+
+
+def _create_pending_upload(user_id: int, files_data: list[dict], docs: list[dict]) -> str:
+    pending_id = f"{_PENDING_ID_PREFIX}{secrets.token_urlsafe(12)}"
+    pending_dir = _pending_dir_for(user_id, pending_id)
+    pending_dir.mkdir(parents=True, exist_ok=False)
+    meta_items = []
+    for idx, (fd, doc) in enumerate(zip(files_data, docs)):
+        ext = Path(fd.get("name", "")).suffix.lower() or ".bin"
+        stored_name = f"{idx}{ext}"
+        atomic_write_bytes(pending_dir / stored_name, bytes(fd.get("bytes") or b""))
+        meta_items.append({
+            "stored_name": stored_name,
+            "name": fd.get("name", ""),
+            "doc_type": doc.get("doc_type", "其他"),
+        })
+    atomic_write_text(pending_dir / "meta.json", json.dumps(meta_items, ensure_ascii=False, indent=2), encoding="utf-8")
+    return pending_id
+
+
+def _commit_pending_archive(user_id: int, pending_id: str, case_name: str) -> str:
+    pending_dir = _pending_dir_for(user_id, pending_id)
+    meta_path = pending_dir / "meta.json"
+    if not meta_path.exists():
+        raise ValueError("待归档文件不存在或已过期")
+    meta_items = json.loads(meta_path.read_text(encoding="utf-8"))
+    files_data = []
+    docs = []
+    for item in meta_items:
+        stored_path = safe_child_path(pending_dir, item.get("stored_name", ""))
+        files_data.append({"name": item.get("name", ""), "bytes": stored_path.read_bytes()})
+        docs.append({"doc_type": item.get("doc_type", "其他")})
+    archive_dir = archive_legal_docs(files_data, docs, case_name)
+    shutil.rmtree(pending_dir, ignore_errors=True)
+    return archive_dir
+
 
 # ── 提取（SSE 流式，不写入）──────────────────────────────────
 
 @router.post("/extract")
-async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str = Form("")):
+async def extract_ledger(
+    files: list[UploadFile] = File(...),
+    vision_model: str = Form(""),
+    user: User = Depends(get_current_user),
+):
     """
     流式提取案件信息、比对台账、归档文书，但不写入 cases.json / Excel。
     SSE 最终事件携带 preview 数据供前端展示确认。
@@ -129,11 +182,11 @@ async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str 
             action_text = f"新案件「{case_name}」，将新增至台账"
             is_new = True
 
-        # Step 5: 归档文书（文件 I/O 卸载到线程池）
-        yield send("📁 归档文书文件…")
+        # Step 5: 暂存待归档文书，确认写入后再进入正式归档目录。
+        yield send("📁 暂存待归档文书…")
         archive_start = time.perf_counter()
-        archive_dir = await asyncio.to_thread(archive_legal_docs, files_data, docs, case_name)
-        yield send(f"→ 已归档至：`{archive_dir}`，用时 {used_since(archive_start)}")
+        pending_archive_id = await asyncio.to_thread(_create_pending_upload, user.id, files_data, docs)
+        yield send(f"→ 已暂存，用时 {used_since(archive_start)}")
 
         yield send(f"✅ 提取完成，总用时 {used_since(overall_start)}，等待确认…")
 
@@ -143,7 +196,8 @@ async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str 
             "match_idx": match_idx,
             "is_new": is_new,
             "action_text": action_text,
-            "archive_dir": archive_dir,
+            "archive_dir": "",
+            "pending_archive_id": pending_archive_id,
             "existing_count": len(existing_cases),
         }
         yield f"data: {json.dumps(preview_payload, ensure_ascii=False)}\n\n"
@@ -157,6 +211,7 @@ class LedgerWriteRequest(BaseModel):
     case_data: dict
     match_idx: int | None
     archive_dir: str
+    pending_archive_id: str = ""
     session_id: str = ""
 
 
@@ -172,6 +227,11 @@ def write_ledger_confirm(
     """
     output_dir = Path(LEDGER_OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        archive_dir = _commit_pending_archive(user.id, req.pending_archive_id, req.case_data.get("案件名称", "")) if req.pending_archive_id else req.archive_dir
+    except Exception as e:
+        write_log(db, user, "ledger_archive_failed", f"案件文书归档失败：{e}", request)
+        raise HTTPException(status_code=500, detail=f"文书归档失败：{e}")
 
     txn_lock = Path(LEDGER_JSON_PATH).with_suffix(".txn")
     with file_lock(txn_lock):
@@ -220,14 +280,14 @@ def write_ledger_confirm(
     reply = (
         f"✅ {action_text}\n\n"
         f"📊 台账共 **{len(updated_cases)}** 个案件，Excel 已更新。\n\n"
-        f"📁 文书已归档至：`{req.archive_dir}`"
+        f"📁 文书已归档至：`{archive_dir}`"
     )
     history = load_history(user.id, req.session_id)
     history.append({"role": "assistant", "content": reply})
     save_history(history, user.id, req.session_id)
 
     write_log(db, user, "ledger_write", f"写入案件台账：{req.case_data.get('案件名称', '')}", request)
-    return {"ok": True, "case_count": len(updated_cases), "reply": reply}
+    return {"ok": True, "case_count": len(updated_cases), "reply": reply, "archive_dir": archive_dir}
 
 
 

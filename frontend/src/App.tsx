@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import type { ComponentType } from 'react'
 import type { Message, Stage, FlowProps, SkillKey, SessionMeta } from './types'
 import {
@@ -118,7 +118,10 @@ export default function App() {
   const currentSessionIdRef = useRef<string>('')
 
   // 从 map 中取当前会话的派生值
-  const messages = messagesMap[currentSessionId] ?? []
+  const messages = useMemo(
+    () => messagesMap[currentSessionId] ?? [],
+    [messagesMap, currentSessionId],
+  )
   const stage: Stage = stages[currentSessionId] ?? 'idle'
   const sending = sendingMap[currentSessionId] ?? false
   const bottomRef = useRef<HTMLDivElement>(null)
