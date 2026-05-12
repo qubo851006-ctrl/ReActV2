@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
-from llm_client import get_llm_client
+from llm_client import get_llm_client, build_ai_http_headers
 from config import MODEL_CHAT, LEDGER_JSON_PATH, LEDGER_OUTPUT_DIR, LEGAL_ARCHIVE_ROOT
 from config import AIRCHINA_API_KEY, AIRCHINA_BASE_URL, AI_HTTP_VERIFY_SSL
 from file_store import atomic_write_bytes, atomic_write_text, file_lock
@@ -35,6 +35,58 @@ _AIRCHINA_OCR_CHANNEL = os.getenv("AIRCHINA_OCR_CHANNEL", "25")
 
 
 # ── 提取文书文字 ──────────────────────────────────────────────
+
+def _strip_ocr_text(value: str) -> str:
+    text = value.strip()
+    text = re.sub(r"^```\w*\s*", "", text)
+    text = re.sub(r"\s*```$", "", text).strip()
+    return text
+
+
+def _collect_ocr_texts(value) -> list[str]:
+    texts: list[str] = []
+    if isinstance(value, str):
+        text = _strip_ocr_text(value)
+        if text:
+            texts.append(text)
+    elif isinstance(value, list):
+        for item in value:
+            texts.extend(_collect_ocr_texts(item))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            key_l = str(key).lower()
+            if key_l in {"markdown", "text", "content"}:
+                texts.extend(_collect_ocr_texts(item))
+            elif isinstance(item, (dict, list)):
+                texts.extend(_collect_ocr_texts(item))
+    return texts
+
+
+def _extract_ocr_text_from_result(result: dict) -> str:
+    payload = result.get("payload", {})
+    payload_result = payload.get("result", {}) if isinstance(payload, dict) else {}
+
+    for candidate in (
+        payload.get("markdown") if isinstance(payload, dict) else None,
+        payload.get("text") if isinstance(payload, dict) else None,
+        payload_result.get("markdown") if isinstance(payload_result, dict) else None,
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return _strip_ocr_text(candidate)
+
+    docs = payload_result.get("document", []) if isinstance(payload_result, dict) else []
+    if isinstance(docs, list):
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            if str(doc.get("name", "")).lower() == "markdown":
+                text = _strip_ocr_text(str(doc.get("value", "")))
+                if text:
+                    return text
+
+    collected = _collect_ocr_texts(payload_result)
+    return "\n".join(dict.fromkeys(collected)).strip()
+
 
 def extract_file_text(file_bytes: bytes, filename: str) -> str:
     """从 PDF/DOCX/DOC 字节提取文字，PDF 优先 pdfplumber，失败则 OCR。"""
@@ -67,6 +119,7 @@ def _ocr_page_with_airchina(page_index: int, img_b64: str) -> tuple[int, str]:
 
     url = AIRCHINA_BASE_URL.rstrip("/") + f"/oneapi/proxy/{_AIRCHINA_OCR_CHANNEL}"
     headers = {
+        **build_ai_http_headers(),
         "Authorization": f"Bearer {AIRCHINA_API_KEY}",
         "Content-Type": "application/json",
     }
@@ -97,15 +150,7 @@ def _ocr_page_with_airchina(page_index: int, img_b64: str) -> tuple[int, str]:
     if header.get("code") != 0:
         raise RuntimeError(f"OCR 服务错误：{header.get('message', '未知')}")
 
-    docs = result.get("payload", {}).get("result", {}).get("document", [])
-    for doc in docs:
-        if doc.get("name") == "markdown":
-            text = doc.get("value", "")
-            text = re.sub(r"^```\w*\s*", "", text.strip())
-            text = re.sub(r"\s*```$", "", text).strip()
-            return page_index, text
-
-    return page_index, ""
+    return page_index, _extract_ocr_text_from_result(result)
 
 
 def _ocr_page_with_vision(client, selected_model: str, page_index: int, img_b64: str) -> tuple[int, str]:
@@ -342,7 +387,16 @@ def _parse_json(raw: str) -> dict:
     return json.loads(raw)
 
 
-_CASE_NO_RE = re.compile(r"[（(]\s*\d{4}\s*[）)]\s*[\u4e00-\u9fffA-Za-z0-9]{2,40}?号")
+_CASE_NO_RE = re.compile(r"[（(]\s*\d{4}\s*[）)]\s*[\u4e00-\u9fffA-Za-z0-9\s]{2,80}?号")
+
+
+def needs_ocr_text(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    chinese_count = len(re.findall(r"[\u4e00-\u9fff]", stripped))
+    slash_tokens = len(re.findall(r"/\d+", stripped))
+    return chinese_count < 20 or slash_tokens > chinese_count
 
 
 def _normalize_case_no(value: str) -> str:

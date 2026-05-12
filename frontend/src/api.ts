@@ -161,6 +161,7 @@ export async function extractLedger(
   const decoder = new TextDecoder()
   let buffer = ''
   let previewData: LedgerPreview | null = null
+  let streamError = ''
 
   while (true) {
     const { done, value } = await reader.read()
@@ -173,13 +174,16 @@ export async function extractLedger(
       try {
         const data = JSON.parse(line.slice(6)) as Partial<LedgerPreview> & {
           log?: string
+          error?: string
           preview?: boolean
         }
         if (typeof data.log === 'string') onLog(data.log)
+        if (typeof data.error === 'string') streamError = data.error
         if (data.preview && data.case_data) previewData = data as LedgerPreview
       } catch { /* ignore */ }
     }
   }
+  if (streamError) throw new Error(streamError)
   if (!previewData) throw new Error('未收到案件预览数据')
   return previewData
 }

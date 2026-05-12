@@ -199,6 +199,99 @@ class LlmClientTests(unittest.TestCase):
         self.assertIn("glm-5-outside", routes["chat_models"])
 
 
+class LedgerOcrResponseTests(unittest.TestCase):
+    def test_low_quality_pdf_text_needs_ocr(self):
+        import ledger_helpers
+
+        noisy_text = "4 4 4 4 2 2 2 2 8: 8: 8: 8: " * 20
+        good_text = "四川省成都市中级人民法院民事判决书。上诉人因房屋租赁合同纠纷一案提起上诉。"
+
+        self.assertTrue(ledger_helpers.needs_ocr_text(noisy_text))
+        self.assertFalse(ledger_helpers.needs_ocr_text(good_text))
+
+    def test_case_number_extraction_allows_ocr_spaces(self):
+        import ledger_helpers
+
+        text = "原审案号为（2022）川 0107 民初 20339 号，本案为二审。"
+
+        self.assertEqual(
+            ledger_helpers._extract_case_numbers_from_text(text),
+            ["(2022)川 0107 民初 20339 号"],
+        )
+
+    def test_airchina_ocr_extracts_payload_markdown(self):
+        import ledger_helpers
+
+        result = {
+            "header": {"code": 0},
+            "payload": {"markdown": "```markdown\nOCR text\n```"},
+        }
+
+        self.assertEqual(ledger_helpers._extract_ocr_text_from_result(result), "OCR text")
+
+    def test_airchina_ocr_extracts_document_markdown(self):
+        import ledger_helpers
+
+        result = {
+            "header": {"code": 0},
+            "payload": {
+                "result": {
+                    "document": [
+                        {"name": "json", "value": "{}"},
+                        {"name": "markdown", "value": "Court text"},
+                    ]
+                }
+            },
+        }
+
+        self.assertEqual(ledger_helpers._extract_ocr_text_from_result(result), "Court text")
+
+    def test_airchina_ocr_request_uses_shared_host_header(self):
+        import ledger_helpers
+
+        captured = {}
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"header": {"code": 0}, "payload": {"markdown": "ok"}}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured["client_kwargs"] = kwargs
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def post(self, url, headers, json):
+                captured["url"] = url
+                captured["headers"] = headers
+                captured["json"] = json
+                return FakeResponse()
+
+        with patch.object(ledger_helpers, "AIRCHINA_API_KEY", "key"), \
+             patch.object(ledger_helpers, "AIRCHINA_BASE_URL", "http://ai.local/v1"), \
+             patch.object(ledger_helpers, "_AIRCHINA_OCR_CHANNEL", "25"), \
+             patch.object(
+                 ledger_helpers,
+                 "build_ai_http_headers",
+                 return_value={"Host": "aiplus.airchina.com.cn:18080"},
+             ), \
+             patch("httpx.Client", FakeClient):
+            idx, text = ledger_helpers._ocr_page_with_airchina(3, "abc")
+
+        self.assertEqual(idx, 3)
+        self.assertEqual(text, "ok")
+        self.assertEqual(captured["headers"]["Host"], "aiplus.airchina.com.cn:18080")
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer key")
+        self.assertEqual(captured["url"], "http://ai.local/v1/oneapi/proxy/25")
+
+
 class OllamaModelRoutingTests(unittest.TestCase):
     """视觉客户端路由：Ollama 本地模型 vs 云端 AI 平台"""
 

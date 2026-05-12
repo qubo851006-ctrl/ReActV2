@@ -21,7 +21,7 @@ from file_store import atomic_write_bytes, file_lock
 
 from config import LEDGER_JSON_PATH, LEDGER_EXCEL_PATH, LEDGER_OUTPUT_DIR
 from ledger_helpers import (
-    extract_file_text, render_pdf_pages, ocr_single_page,
+    extract_file_text, render_pdf_pages, ocr_single_page, needs_ocr_text,
     detect_doc_type_by_content,
     extract_case_fields, load_cases_json, save_cases_json,
     find_matching_case_idx, merge_case_data, archive_legal_docs,
@@ -58,6 +58,9 @@ async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str 
         def send(msg: str) -> str:
             return f"data: {json.dumps({'log': msg}, ensure_ascii=False)}\n\n"
 
+        def send_error(msg: str) -> str:
+            return f"data: {json.dumps({'error': msg}, ensure_ascii=False)}\n\n"
+
         # Step 1: 提取文字（阻塞 I/O + OCR 卸载到线程池）
         docs = []
         for fd in files_data:
@@ -65,8 +68,12 @@ async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str 
             text_start = time.perf_counter()
             text = await asyncio.to_thread(extract_file_text, fd["bytes"], fd["name"])
             yield send(f"→ 提取到 **{len(text)}** 字符，用时 {used_since(text_start)}")
-            if not text:
-                yield send("→ 扫描件，启动视觉 OCR…")
+            is_pdf = os.path.splitext(fd["name"])[1].lower() == ".pdf"
+            if is_pdf and needs_ocr_text(text):
+                if text:
+                    yield send("→ PDF 文字层质量较低，启动 OCR…")
+                else:
+                    yield send("→ 扫描件，启动 OCR…")
                 try:
                     ocr_start = time.perf_counter()
                     pages = await asyncio.to_thread(render_pdf_pages, fd["bytes"])
@@ -85,6 +92,10 @@ async def extract_ledger(files: list[UploadFile] = File(...), vision_model: str 
             doc_type = await asyncio.to_thread(detect_doc_type_by_content, text) if text else "其他"
             yield send(f"→ 文书类型：**{doc_type}**，用时 {used_since(type_start)}")
             docs.append({"filename": fd["name"], "text": text, "doc_type": doc_type})
+
+        if not any((doc.get("text") or "").strip() for doc in docs):
+            yield send_error("OCR 未识别到可用于案件台账生成的正文，请检查扫描件清晰度或 OCR 服务配置后重试。")
+            return
 
         # Step 2: AI 提取字段（阻塞 LLM 调用卸载到线程池）
         yield send("**Step 2** 🤖 AI 抽取案件字段…")

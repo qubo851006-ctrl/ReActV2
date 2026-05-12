@@ -2,6 +2,15 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.19',
+    date: '2026-05-12',
+    changes: [
+      { type: 'fix', text: '案件台账二审文书识别修复：当 PDF 自带文字层被解析成重复数字、符号等低质量内容时，自动转入 OCR，不再把乱码当作有效正文，避免二审判决书被误判为新案件' },
+      { type: 'fix', text: '案件匹配增强：放宽案号识别规则，支持 OCR 结果中带空格的案号格式，并通过二审文书正文中的原审案号匹配已有案件，正确追加二审审级结果' },
+      { type: 'fix', text: 'OCR 返回解析兼容增强：兼容中航信 OCR 的 payload.markdown、payload.text、payload.result.markdown 和 document markdown 等多种返回结构，并复用 AI 平台 Host 头配置' },
+    ],
+  },
+  {
     version: 'v2.18',
     date: '2026-05-12',
     changes: [

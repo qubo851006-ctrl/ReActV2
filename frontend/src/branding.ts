@@ -1,7 +1,7 @@
 export interface VersionEntry {
   version: string
   date: string
-  changes: { type: 'feat' | 'fix' | 'refactor'; text: string }[]
+  changes: { type: 'feat' | 'fix' | 'perf' | 'refactor'; text: string }[]
 }
 
 export const APP_NAME = '法度云图'
