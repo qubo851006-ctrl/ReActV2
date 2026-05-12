@@ -2,6 +2,15 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.20',
+    date: '2026-05-12',
+    changes: [
+      { type: 'fix', text: '案件台账人工口径增强：诉讼主体要求列全原告、被告、第三人等全部主体，禁止用"等"省略，减少主体漏提' },
+      { type: 'fix', text: '处理结果改为企业法务管理摘要口径：自动补齐法院、日期、案号、文书性质、裁判主文、后续程序和公司经济影响，更接近人工台账写法' },
+      { type: 'fix', text: '基本情况字段回归诉请口径，重点保留请求事项、金额、期间和责任承担，避免混入过长裁判理由；补充对应回归测试' },
+    ],
+  },
+  {
     version: 'v2.19',
     date: '2026-05-12',
     changes: [

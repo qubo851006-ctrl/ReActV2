@@ -316,10 +316,10 @@ PROMPT_SUSOSTATE = """你是法务专家，从以下起诉状/上诉状中提取
 - 案件名称：格式"原告方 与 被告方 案由纠纷案"，简洁概括
 - 案件发生时间：起诉/立案日期，格式 YYYY-MM-DD，找不到填 null
 - 案由：如"房屋租赁合同纠纷"、"劳动争议"等
-- 诉讼主体：列出所有原告和被告，格式"原告：XX\n被告一：XX\n被告二：XX"
+- 诉讼主体：列出所有原告、被告、第三人等全部诉讼主体，格式"原告：XX\n被告一：XX\n被告二：XX"，禁止用"等"省略主体
 - 主诉被诉：填"诉讼-主诉"或"诉讼-被诉"
 - 标的金额：诉讼请求的金额总计，单位万元，保留两位小数，找不到填 null
-- 基本情况：诉讼请求的完整内容，保持原文，不要省略
+- 基本情况：以诉讼请求为主，写清请求事项、金额、期间、责任承担；不要加入法院裁判理由
 
 只返回JSON，不要其他文字：
 {"案号":null,"案件名称":"","案件发生时间":"","案由":"","诉讼主体":"","主诉被诉":"","标的金额":null,"基本情况":""}
@@ -332,17 +332,21 @@ PROMPT_JUDGMENT = """你是法务专家，从以下判决书/裁定书中提取�
 要求：
 - 本案案号：本判决书的案号，如"(2023)川01民终24491号"，找不到填 null
 - 关联案号：文中提到的上一审级案号（如"原审"/"一审"的案号），找不到填 null
+- 法院名称：作出本判决/裁定的法院名称，找不到填 null
 - 审级：根据本案案号中的字样判断，严格按以下规则填写：
   * 案号含"民初"→填"一审"
   * 案号含"民终"→填"二审"
   * 案号含"民申"或文书标题含"再审"→填"再审"
   * 实在无法判断→填"一审"
+- 文书性质：如"一审判决"、"终审判决"、"民事裁定"，找不到填 null
 - 生效判决日期：判决书落款日期，格式 YYYY-MM-DD，找不到填 null
-- 处理结果：法院最终判决结论，包括驳回/支持、金额、各方义务，尽量简明（200字内）
+- 处理结果：按企业法务案件台账口径提炼裁判主文，优先写驳回/支持/撤销/维持/改判/发回、金额、各方义务、费用承担，尽量简明；不要展开长篇裁判理由
+- 后续程序：如文中提到已上诉、再审、执行、结案、回款、终审结果，写明日期、主体、法院和请求/结果；没有填 null
+- 公司经济影响：如收回款项、挽回损失、保证金归属、我方需支付金额等，按管理口径简明汇总；没有填 null
 - 服务律所：代理我方的律师事务所及律师姓名，找不到填 null
 
 只返回JSON，不要其他文字：
-{"本案案号":null,"关联案号":null,"审级":"","生效判决日期":"","处理结果":"","服务律所":null}
+{"本案案号":null,"关联案号":null,"法院名称":null,"审级":"","文书性质":null,"生效判决日期":"","处理结果":"","后续程序":null,"公司经济影响":null,"服务律所":null}
 
 文书内容：
 {text}"""
@@ -414,6 +418,11 @@ def _case_no_key(value: str) -> str:
     return re.sub(r"\s+", "", _normalize_case_no(value))
 
 
+def _display_case_no(value: str) -> str:
+    normalized = _normalize_case_no(value)
+    return re.sub(r"^\((\d{4})\)", r"（\1）", normalized)
+
+
 def _dedupe_case_numbers(values: list[str]) -> list[str]:
     seen = set()
     result = []
@@ -458,6 +467,77 @@ def _merge_situation_text(client, business_bg: str, litigation_claims: str) -> s
         max_tokens=1000, temperature=0.1,
     )
     return resp.choices[0].message.content.strip()
+
+
+def _format_cn_date(value) -> str:
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?", text)
+    if not match:
+        return text
+    year, month, day = match.groups()
+    return f"{year}年{int(month)}月{int(day)}日"
+
+
+def _default_doc_nature(stage: str, case_no: str = "") -> str:
+    if stage == "二审":
+        return "终审判决"
+    if stage == "再审" or "民申" in (case_no or ""):
+        return "民事裁定"
+    if stage == "一审":
+        return "一审判决"
+    return "判决"
+
+
+def _join_ledger_sentences(parts: list[str]) -> str:
+    sentences: list[str] = []
+    for part in parts:
+        text = str(part or "").strip()
+        if not text:
+            continue
+        if text[-1] not in "。；;":
+            text += "。"
+        sentences.append(text)
+    return "".join(sentences)
+
+
+def _ledger_result_from_judgment_fields(fields: dict, stage: str) -> str:
+    """把判决/裁定抽取结果整理成人工台账偏好的管理摘要。"""
+    result_text = (fields.get("处理结果") or "").strip()
+    main_case_no = _display_case_no(fields.get("本案案号") or "")
+    court = str(fields.get("法院名称") or "").strip()
+    decision_date = _format_cn_date(fields.get("生效判决日期"))
+    doc_nature = str(fields.get("文书性质") or "").strip() or _default_doc_nature(stage, main_case_no)
+
+    prefix_bits: list[str] = []
+    if court:
+        prefix_bits.append(court)
+    if decision_date:
+        prefix_bits.append(f"于{decision_date}" if court else decision_date)
+
+    prefix = "".join(prefix_bits)
+    if prefix:
+        prefix += "作出"
+    if main_case_no:
+        prefix += main_case_no
+    if doc_nature and doc_nature not in prefix:
+        prefix += doc_nature
+
+    main_case_no_key = _case_no_key(main_case_no)
+    has_management_prefix = bool(
+        prefix
+        and (not court or court in result_text)
+        and (not main_case_no_key or main_case_no_key in _case_no_key(result_text))
+    )
+    if prefix and result_text and not has_management_prefix:
+        result_text = f"{prefix}：{result_text}"
+    elif prefix and not result_text:
+        result_text = f"{prefix}：处理结果待补充"
+
+    return _join_ledger_sentences([
+        result_text,
+        fields.get("后续程序"),
+        fields.get("公司经济影响"),
+    ])
 
 
 def _extract_doc_fields(client, doc: dict) -> dict:
@@ -572,7 +652,7 @@ def extract_case_fields(docs: list, status_fn: Callable | None = None) -> dict:
                     stage = "一审"
                 elif "民申" in main_case_no:
                     stage = "再审"
-            result_text = (fields.get("处理结果") or "").strip()
+            result_text = _ledger_result_from_judgment_fields(fields, stage)
             if stage:
                 stages_dict[stage] = result_text or "（处理结果待补充）"
             if not case["服务律所"] and fields.get("服务律所"):
