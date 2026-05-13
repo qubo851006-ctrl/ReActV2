@@ -210,6 +210,45 @@ class ExcelWriterNewFileTests(unittest.TestCase):
             # openpyxl 将写入的空字符串读回为 None，两种情况均视为"空"
             self.assertFalse(cell_value, f"期望空单元格，实际值为 {cell_value!r}")
 
+    def test_duplicate_training_updates_existing_row_by_date_and_topic(self):
+        """同一培训日期+主题再次写入时更新原行，不新增重复记录"""
+        import openpyxl
+        from utils.excel_writer import append_record
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "培训统计表.xlsx"
+            with patch("utils.excel_writer.EXCEL_PATH", str(path)):
+                append_record(
+                    date="2026-05-11",
+                    topic="合规专题培训",
+                    location="第一会议室",
+                    department="法律部",
+                    count=10,
+                    category="合规培训",
+                    archive_path="/archive/old",
+                    duration_hours=4.0,
+                )
+                append_record(
+                    date="2026-05-11",
+                    topic=" 合规专题培训 ",
+                    location="第二会议室",
+                    department="审计部",
+                    count=12,
+                    category="法律培训",
+                    archive_path="/archive/new",
+                    duration_hours=8.0,
+                )
+
+            wb = openpyxl.load_workbook(str(path))
+            ws = wb.active
+            self.assertEqual(ws.max_row, 2)
+            self.assertEqual(ws.cell(row=2, column=1).value, 1)
+            self.assertEqual(ws.cell(row=2, column=4).value, "第二会议室")
+            self.assertEqual(ws.cell(row=2, column=5).value, "审计部")
+            self.assertEqual(ws.cell(row=2, column=6).value, 12)
+            self.assertEqual(ws.cell(row=2, column=7).value, 8.0)
+            self.assertEqual(ws.cell(row=2, column=9).value, "/archive/new")
+
 
 # ─────────────────────────────────────────────────────────────
 # 4. _migrate_headers — 旧版文件自动迁移（回归测试）

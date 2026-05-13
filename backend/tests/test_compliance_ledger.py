@@ -210,6 +210,32 @@ class ComplianceLedgerPersistenceTests(unittest.TestCase):
             self.assertEqual([r["sequence"] for r in records], [1, 2])
             self.assertEqual(records[1]["title"], "事项二")
 
+    def test_append_record_updates_existing_item_by_title(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            path = Path(tmpdir) / "records.json"
+            base_record = {
+                "title": "关于采购系统升级的合规审查",
+                "procedure": "董事会审议",
+                "undertaking_department": "法务合规部",
+                "background_materials": ["旧附件.pdf"],
+                "review_rows": [{"review_unit": "审计部/法务合规部", "detail": "旧意见"}],
+            }
+
+            records = append_record(base_record, path)
+            records = append_record({
+                **base_record,
+                "procedure": "总办会审议",
+                "background_materials": ["新附件.pdf"],
+                "review_rows": [{"review_unit": "审计部/法务合规部", "detail": "新意见"}],
+            }, path)
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["sequence"], 1)
+            self.assertEqual(records[0]["procedure"], "总办会审议")
+            self.assertEqual(records[0]["background_materials"], ["新附件.pdf"])
+            self.assertEqual(records[0]["review_rows"][0]["detail"], "新意见")
+
     def test_write_compliance_rolls_back_json_when_workbook_generation_fails(self):
         from routers.compliance import ComplianceWriteRequest, write_compliance
 

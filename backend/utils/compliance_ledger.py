@@ -292,11 +292,29 @@ def save_records(records: list[dict[str, Any]], path: str | Path = COMPLIANCE_LE
         atomic_write_text(p, json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def append_record(record: dict[str, Any], path: str | Path = COMPLIANCE_LEDGER_JSON_PATH) -> list[dict[str, Any]]:
-    records = load_records(path)
+def _normalize_record_key(value: Any) -> str:
+    return "".join(str(value or "").split()).lower()
+
+
+def upsert_record(records: list[dict[str, Any]], record: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any], bool]:
+    title_key = _normalize_record_key(record.get("title"))
+    if title_key:
+        for idx, existing in enumerate(records):
+            if _normalize_record_key(existing.get("title")) == title_key:
+                updated = dict(record)
+                updated["sequence"] = existing.get("sequence") or idx + 1
+                records[idx] = updated
+                return records, updated, True
+
     next_record = dict(record)
     next_record["sequence"] = len(records) + 1
     records.append(next_record)
+    return records, next_record, False
+
+
+def append_record(record: dict[str, Any], path: str | Path = COMPLIANCE_LEDGER_JSON_PATH) -> list[dict[str, Any]]:
+    records = load_records(path)
+    records, _, _ = upsert_record(records, record)
     save_records(records, path)
     return records
 

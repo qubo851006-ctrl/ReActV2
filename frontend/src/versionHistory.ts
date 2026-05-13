@@ -2,6 +2,14 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.23',
+    date: '2026-05-13',
+    changes: [
+      { type: 'fix', text: '培训统计及归档增加重复事项更新：同一培训日期和培训主题再次确认写入时，更新原有行的地点、部门、人数、课时、类别和归档路径，不再新增重复记录' },
+      { type: 'fix', text: '合规审查工作台账增加重复事项更新：同一重大事项标题再次确认写入时，更新原有事项内容并保留原序号，不再新增重复事项' },
+    ],
+  },
+  {
     version: 'v2.22',
     date: '2026-05-13',
     changes: [

@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from datetime import datetime
@@ -70,6 +71,31 @@ def _migrate_headers(ws) -> None:
     # 已有数据行在新列填空（insert_cols 已自动移位，新列单元格为空，无需额外处理）
 
 
+def _normalize_key(value) -> str:
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def _find_existing_training_row(ws, date: str, topic: str) -> int | None:
+    target_date = _normalize_key(date)
+    target_topic = _normalize_key(topic)
+    if not target_date or not target_topic:
+        return None
+
+    headers = {ws.cell(row=1, column=c).value: c for c in range(1, ws.max_column + 1)}
+    date_col = headers.get("培训日期")
+    topic_col = headers.get("培训主题")
+    if not date_col or not topic_col:
+        return None
+
+    for row in range(2, ws.max_row + 1):
+        if (
+            _normalize_key(ws.cell(row=row, column=date_col).value) == target_date
+            and _normalize_key(ws.cell(row=row, column=topic_col).value) == target_topic
+        ):
+            return row
+    return None
+
+
 def append_record(
     date: str,
     topic: str,
@@ -80,7 +106,7 @@ def append_record(
     archive_path: str,
     duration_hours: float = 0.0,
 ):
-    """在 Excel 中追加一条培训记录"""
+    """写入培训记录；同一培训日期和主题已存在时更新原行。"""
     with file_lock(EXCEL_PATH):
         if os.path.exists(EXCEL_PATH):
             wb = openpyxl.load_workbook(EXCEL_PATH)
@@ -99,8 +125,10 @@ def append_record(
                 ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = width
             ws.row_dimensions[1].height = 22
 
-        next_row = ws.max_row + 1
-        seq = next_row - 1  # 序号（去掉表头行）
+        existing_row = _find_existing_training_row(ws, date, topic)
+        next_row = existing_row or ws.max_row + 1
+        seq = ws.cell(row=next_row, column=1).value if existing_row else next_row - 1
+        seq = seq or next_row - 1
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
 

@@ -27,6 +27,7 @@ from utils.compliance_ledger import (
     load_responsible_persons,
     normalize_extracted_item,
     save_responsible_persons,
+    upsert_record,
 )
 
 router = APIRouter(prefix="/api/compliance", tags=["compliance"])
@@ -116,9 +117,7 @@ def write_compliance(
         try:
             with trace.step("load_records"):
                 records = load_records(json_path)
-            next_record = dict(record)
-            next_record["sequence"] = len(records) + 1
-            records.append(next_record)
+            records, saved_record, updated_existing = upsert_record(records, record)
             excel_path.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(suffix=".xlsx", dir=str(excel_path.parent), delete=False) as tmp:
                 tmp_excel = tmp.name
@@ -127,7 +126,7 @@ def write_compliance(
             with trace.step("commit_files"):
                 atomic_write_text(json_path, json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
                 Path(tmp_excel).replace(excel_path)
-            sequence = records[-1].get("sequence", len(records))
+            sequence = saved_record.get("sequence", len(records))
         except Exception as e:
             if tmp_excel and os.path.exists(tmp_excel):
                 try:
@@ -147,7 +146,8 @@ def write_compliance(
         finally:
             trace.finish()
 
-    reply = f"✅ 合规审查工作台账已更新！已新增第 {sequence} 项：{record.get('title', '')}"
+    action_text = "已更新原有事项" if updated_existing else "已新增"
+    reply = f"✅ 合规审查工作台账已更新！{action_text}第 {sequence} 项：{record.get('title', '')}"
     if body.session_id:
         history = load_history(user.id, body.session_id)
         history.append({"role": "assistant", "content": reply})
