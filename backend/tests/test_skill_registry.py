@@ -25,6 +25,7 @@ class SkillRegistryTests(unittest.TestCase):
             "waiting_auth_file",
             "waiting_compliance_file",
             "query_company",
+            "debt_recovery_assessment",
             "other",
         ]:
             self.assertIn(intent, VALID_INTENTS)
@@ -47,6 +48,12 @@ class SkillRegistryTests(unittest.TestCase):
 
         self.assertIn("download_training_excel", INTENT_DESCRIPTIONS_WORKFLOW)
         self.assertIn("waiting_compliance_file", INTENT_DESCRIPTIONS_WORKFLOW)
+
+    def test_qcc_intent_descriptions_exported(self):
+        from skills.registry import QCC_INTENT_DESCRIPTIONS
+        self.assertIn("query_company", QCC_INTENT_DESCRIPTIONS)
+        self.assertIn("debt_recovery_assessment", QCC_INTENT_DESCRIPTIONS)
+        self.assertIn("claim_amount", QCC_INTENT_DESCRIPTIONS)
 
 
 if __name__ == "__main__":

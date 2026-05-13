@@ -26,6 +26,7 @@ from skills.registry import (
     INTENT_RESPONSES,
     VALID_INTENTS,
     WORKFLOW_HINTS,
+    QCC_INTENT_DESCRIPTIONS,
 )
 
 _HISTORY_DIR = Path(DATA_ROOT) / "history"
@@ -100,8 +101,7 @@ async def _classify_async(client: AsyncOpenAI, message: str) -> dict:
 【工作流意图】格式：{{"intent": "意图名"}}
 {INTENT_DESCRIPTIONS_WORKFLOW}
 
-【企业查询】格式：{{"intent": "query_company", "company": "企业名称"}}
-条件：用户提及具体公司名称并想查询工商/司法等信息
+{QCC_INTENT_DESCRIPTIONS}
 
 【普通对话】格式：{{"intent": "other", "next_stage": null}}
 next_stage 可选值（仅当用户有明确操作需求时填入，否则填 null）：
@@ -124,13 +124,18 @@ waiting_files / waiting_ledger_files / waiting_auth_file / waiting_compliance_fi
         intent = data.get("intent", "other")
         if intent not in VALID_INTENTS:
             intent = "other"
+        try:
+            claim_amount = float(data.get("claim_amount") or 0)
+        except (TypeError, ValueError):
+            claim_amount = 0.0
         return {
             "intent": intent,
             "company": data.get("company"),
+            "claim_amount": claim_amount,
             "next_stage": data.get("next_stage"),
         }
     except Exception:
-        return {"intent": "other", "company": None, "next_stage": None}
+        return {"intent": "other", "company": None, "claim_amount": 0.0, "next_stage": None}
 
 
 async def _stream_reply_async(client: AsyncOpenAI, message: str, history: list, model: str):
@@ -429,13 +434,41 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)):
             if intent == "query_company":
                 company = cls.get("company") or req.message
                 try:
-                    from utils.mcp_client import query_company, format_company_markdown
-                    result = await asyncio.to_thread(query_company, company)
-                    reply = format_company_markdown(result)
+                    # 优先使用企查查 MCP；失败时回退到旧 mcpmarket 端点
+                    from utils.qcc_mcp_client import (
+                        query_company as qcc_query,
+                        format_company_markdown as qcc_format,
+                    )
+                    try:
+                        result = await asyncio.to_thread(qcc_query, company)
+                        reply = qcc_format(result)
+                    except Exception:
+                        from utils.mcp_client import query_company, format_company_markdown
+                        result = await asyncio.to_thread(query_company, company)
+                        reply = format_company_markdown(result)
                 except ValueError as e:
                     reply = f"❌ 未找到匹配企业：{e}"
                 except Exception as e:
                     reply = f"❌ 企业信息查询失败：{e}"
+                await asyncio.to_thread(_append_and_save, history, req.message, reply, uid, sid)
+                yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
+                return
+
+            # ── 债务清偿能力评估（同步，卸载到线程）──────────────
+            if intent == "debt_recovery_assessment":
+                company = cls.get("company") or req.message
+                claim_amount = cls.get("claim_amount") or 0.0
+                try:
+                    from utils.qcc_debt_assessment import (
+                        assess_debt_recovery,
+                        format_assessment_markdown,
+                    )
+                    result = await asyncio.to_thread(
+                        assess_debt_recovery, company, float(claim_amount)
+                    )
+                    reply = format_assessment_markdown(result)
+                except Exception as e:
+                    reply = f"❌ 债务清偿评估失败：{e}"
                 await asyncio.to_thread(_append_and_save, history, req.message, reply, uid, sid)
                 yield _sse({"type": "done", "reply": reply, "next_stage": "idle", "kb_conversation_id": ""})
                 return

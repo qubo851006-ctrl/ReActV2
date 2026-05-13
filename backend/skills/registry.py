@@ -105,7 +105,7 @@ WORKFLOW_SKILLS: tuple[WorkflowSkill, ...] = (
 )
 
 
-VALID_INTENTS = {skill.intent for skill in WORKFLOW_SKILLS if skill.fixed_response} | {"query_company", "other"}
+VALID_INTENTS = {skill.intent for skill in WORKFLOW_SKILLS if skill.fixed_response} | {"query_company", "debt_recovery_assessment", "other"}
 
 INTENT_DESCRIPTIONS_WORKFLOW = "\n".join(
     f"- {skill.intent}：{skill.intent_description}"
@@ -130,3 +130,13 @@ INTENT_RESPONSES = {
     for skill in WORKFLOW_SKILLS
     if skill.fixed_response and skill.reply
 }
+
+# ── QCC API 技能（非固定回复，chat.py 直接分发）──────────────────────────────
+# 以下常量集中管理 LLM 意图分类提示块，避免 chat.py 内硬编码
+QCC_INTENT_DESCRIPTIONS = (
+    '【企业查询】格式：{"intent": "query_company", "company": "企业名称"}\n'
+    "条件：用户提及具体公司名称并想查询工商/司法等基本信息\n"
+    "\n"
+    '【债务清偿评估】格式：{"intent": "debt_recovery_assessment", "company": "企业名称", "claim_amount": 金额数字或0}\n'
+    "条件：用户想评估某企业的偿债能力、追偿可行性、诉前保全决策、债权回收分析等"
+)

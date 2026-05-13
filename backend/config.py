@@ -41,6 +41,7 @@ AIRCHINA_BASE_URL = os.getenv("AIRCHINA_BASE_URL",  "")
 AI_HTTP_HOST_HEADER = os.getenv("AI_HTTP_HOST_HEADER", "")
 ZHISHU_API_KEY    = os.getenv("ZHISHU_API_KEY",     "")
 ZHISHU_BASE_URL   = os.getenv("ZHISHU_BASE_URL",    "")
+QCC_TOKEN         = os.getenv("QCC_TOKEN",           "")
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL",    "")
 OLLAMA_API_KEY    = os.getenv("OLLAMA_API_KEY",     "ollama")
 
