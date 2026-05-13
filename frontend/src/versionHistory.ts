@@ -2,6 +2,14 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.24',
+    date: '2026-05-13',
+    changes: [
+      { type: 'refactor', text: '功能入口改为技能式注册表管理：左侧快捷入口、欢迎页功能卡片、触发话术和下载入口统一从前端 skills/registry.ts 读取，减少新增功能时多处重复配置' },
+      { type: 'refactor', text: '聊天意图和工作流引导改为后端技能注册表管理：下载、培训、案件、授权、合规等固定意图回复，以及审计/三台账合并等可引导阶段统一从 backend/skills/registry.py 读取' },
+    ],
+  },
+  {
     version: 'v2.23',
     date: '2026-05-13',
     changes: [

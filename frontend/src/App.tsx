@@ -34,6 +34,7 @@ import {
   type ModelOption,
   type VisionModel,
 } from './modelOptions'
+import { DOWNLOAD_DEFINITIONS, SKILLS, SKILL_TRIGGERS } from './skills/registry'
 
 // 新增 Flow 组件：在此表加一行，不改 App 主逻辑
 const FLOW_COMPONENTS: Partial<Record<Stage, ComponentType<FlowProps>>> = {
@@ -48,45 +49,17 @@ const FLOW_COMPONENTS: Partial<Record<Stage, ComponentType<FlowProps>>> = {
 const CHAT_MODEL_STORAGE_KEY = 'fadu.chatModel'
 const VISION_MODEL_STORAGE_KEY = 'fadu.visionModel'
 
-// 新增下载功能：在此表加一行，不改 App 主逻辑
-const DOWNLOAD_ACTIONS: Partial<Record<Stage, { label: string; fn: () => void }>> = {
-  download_training_excel: { label: '下载培训统计表 Excel', fn: downloadTrainingExcel },
-  download_ledger_excel: { label: '下载案件台账 Excel', fn: downloadLedgerExcel },
-  download_compliance_excel: { label: '下载合规审查工作台账 Excel', fn: downloadComplianceLedger },
+const DOWNLOAD_FNS: Partial<Record<Stage, () => void>> = {
+  download_training_excel: downloadTrainingExcel,
+  download_ledger_excel: downloadLedgerExcel,
+  download_compliance_excel: downloadComplianceLedger,
 }
 
-// 侧边栏技能按钮触发配置（新增技能在此加一行，并在 types.ts 的 SkillKey 里加成员）
-const SKILL_TRIGGERS: Record<SkillKey, { msg: string; reply: string; stage: Stage }> = {
-  training: {
-    msg: '📊 培训统计及归档',
-    reply: '好的！请上传以下两个文件：\n\n- 📄 **培训通知**（PDF 格式）\n- ✍️ **签到表**（图片格式：JPG / PNG）',
-    stage: 'waiting_files',
-  },
-  ledger: {
-    msg: '⚖️ 案件台账生成',
-    reply: '好的！请上传案件的法律文书文件（支持 **PDF / DOCX / DOC**，可多选）。\n\n系统会自动识别文书类型，并判断是否为台账中的已有案件。',
-    stage: 'waiting_ledger_files',
-  },
-  auth: {
-    msg: '📝 授权请示起草',
-    reply: '好的！请上传**呈批件 PDF**，系统将自动提取关键信息并生成授权请示 Word 文档。\n\n- 支持文字版 PDF（直接提取）\n- 支持扫描版 PDF（自动 OCR 识别）',
-    stage: 'waiting_auth_file',
-  },
-  merge: {
-    msg: '🔀 三台账合并',
-    reply: '好的！请分别上传三个系统导出的 Excel 台账：\n\n- 📘 **合同系统台账**（必填，作为合并主键）\n- 📗 **采购系统台账**（可选）\n- 📙 **财务系统台账**（可选）\n\n系统将以合同编号为关键字段自动合并，支持大小写、全角括号等差异的模糊匹配。',
-    stage: 'waiting_ledger_merge_files',
-  },
-  audit: {
-    msg: '🔍 审计问题分析',
-    reply: '好的！请上传**审计发现问题汇总表**（Excel 格式），系统将自动识别问题列，通过 AI 对每条问题进行**双维度分类**：\n\n- 📌 **问题类别**（内控缺陷 / 制度执行 / 资金管理 / 采购管理）\n- 🏢 **业务领域**（工程业务 / 酒店业务 / 物业管理 / 资产管理）\n\n分类完成后可审查修改，并生成可视化分析报告。',
-    stage: 'waiting_audit_file',
-  },
-  compliance: {
-    msg: '📑 合规审查工作台账生成',
-    reply: '好的！请上传 OA 流程表单及审批记录 PDF，系统会提取重大事项、程序、审查意见、签署时间和背景材料，确认后写入长期累计合规审查工作台账。',
-    stage: 'waiting_compliance_file',
-  },
+// 下载入口由 skill registry 提供文案，App 只绑定实际执行函数。
+const DOWNLOAD_ACTIONS: Partial<Record<Stage, { label: string; fn: () => void }>> = {}
+for (const def of DOWNLOAD_DEFINITIONS) {
+  const fn = DOWNLOAD_FNS[def.stage]
+  if (fn) DOWNLOAD_ACTIONS[def.stage] = { label: def.label, fn }
 }
 
 export default function App() {
@@ -422,13 +395,14 @@ export default function App() {
               <div className="text-sm text-slate-500 mb-8">AI 驱动的法务合规智能工具</div>
               <div className="grid grid-cols-2 gap-3 w-full max-w-md">
                 {[
-                  { icon: '📊', label: '培训统计', desc: '培训通知 + 签到表归档', color: 'border-blue-500/30 hover:border-blue-500/60 hover:bg-blue-500/5',    key: 'training' as const },
-                  { icon: '⚖️', label: '案件台账', desc: '法律文书 → 台账提取',   color: 'border-violet-500/30 hover:border-violet-500/60 hover:bg-violet-500/5', key: 'ledger'   as const },
-                  { icon: '📝', label: '授权请示', desc: '呈批件 → 授权书起草',   color: 'border-emerald-500/30 hover:border-emerald-500/60 hover:bg-emerald-500/5',key: 'auth'     as const },
-                  { icon: '🔀', label: '三台账合并', desc: '合同/采购/财务合并',  color: 'border-amber-500/30 hover:border-amber-500/60 hover:bg-amber-500/5',    key: 'merge'    as const },
-                  { icon: '🔍', label: '审计分析', desc: 'AI分类审计问题',        color: 'border-red-500/30 hover:border-red-500/60 hover:bg-red-500/5',          key: 'audit'    as const },
-                  { icon: '📑', label: '合规审查台账', desc: 'OA审批PDF → 累计台账', color: 'border-cyan-500/30 hover:border-cyan-500/60 hover:bg-cyan-500/5', key: 'compliance' as const },
-                  { icon: '💬', label: '直接对话', desc: '询问、查询、或聊任意话题', color: 'border-slate-600/50 hover:border-slate-500 hover:bg-slate-700/20',    key: null },
+                  ...SKILLS.map(skill => ({
+                    icon: skill.icon,
+                    label: skill.welcomeLabel,
+                    desc: skill.welcomeDesc,
+                    color: skill.welcomeColor,
+                    key: skill.key,
+                  })),
+                  { icon: '💬', label: '直接对话', desc: '询问、查询、或聊任意话题', color: 'border-slate-600/50 hover:border-slate-500 hover:bg-slate-700/20', key: null },
                 ].map(item => (
                   <button
                     key={item.label}

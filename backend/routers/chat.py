@@ -20,6 +20,13 @@ from llm_client import format_llm_error, build_ai_http_headers
 from model_routes import resolve_chat_model, resolve_intent_model, resolve_vision_model
 from auth_utils import get_current_user
 from models import User
+from skills.registry import (
+    ACTIONABLE_STAGES,
+    INTENT_DESCRIPTIONS_WORKFLOW,
+    INTENT_RESPONSES,
+    VALID_INTENTS,
+    WORKFLOW_HINTS,
+)
 
 _HISTORY_DIR = Path(DATA_ROOT) / "history"
 _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
@@ -29,47 +36,11 @@ _SESSION_ID_RE = re.compile(r'^sess_[A-Za-z0-9_-]+$')
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
-# ── 意图集合（新增意图在此加一行）────────────────────────────────
-_VALID_INTENTS = {
-    "download_training_excel",
-    "download_ledger_excel",
-    "download_compliance_excel",
-    "waiting_files",
-    "waiting_ledger_files",
-    "waiting_auth_file",
-    "waiting_compliance_file",
-    "query_company",
-    "other",
-}
-
-# 工作流意图描述（供 _classify_async 使用，不含 query_company / other）
-_INTENT_DESCRIPTIONS_WORKFLOW = """\
-- download_compliance_excel：用户想下载或导出合规审查工作台账 Excel
-- download_training_excel：用户想下载或导出培训统计表、培训台账、培训记录 Excel
-- download_ledger_excel：用户想下载或导出案件台账、诉讼台账 Excel
-- waiting_files：用户想统计培训签到、归档培训文件、新增培训记录（需上传文件，不是单纯下载）
-- waiting_ledger_files：用户想处理案件台账、整理法律文书、新增案件记录（需上传文书，不是单纯下载）
-- waiting_auth_file：用户想起草授权请示、根据呈批件生成授权文件
-- waiting_compliance_file：用户想根据 OA 审批 PDF 生成合规审查工作台账"""
-
-# 通用对话可以主动触发的 stage
-_ACTIONABLE_STAGES = {
-    "waiting_files",
-    "waiting_ledger_files",
-    "waiting_auth_file",
-    "waiting_compliance_file",
-    "waiting_ledger_merge_files",
-    "waiting_audit_file",
-}
-
-_WORKFLOW_HINTS = """\
-- waiting_files：用户有培训通知/签到表需要统计归档
-- waiting_ledger_files：用户有法律文书（起诉状/判决书/裁定书/强制执行申请）需要录入台账
-- waiting_auth_file：用户需要根据呈批件起草授权请示或授权书
-- waiting_compliance_file：用户需要根据 OA 流程表单/审批记录 PDF 生成合规审查工作台账
-- waiting_ledger_merge_files：用户需要合并合同/采购/财务多个系统导出的台账 Excel
-- waiting_audit_file：用户需要对审计发现问题进行 AI 分类分析"""
-
+# 兼容旧测试和可能的外部导入；实际来源已迁移到 skills.registry。
+_VALID_INTENTS = VALID_INTENTS
+_ACTIONABLE_STAGES = ACTIONABLE_STAGES
+_INTENT_DESCRIPTIONS_WORKFLOW = INTENT_DESCRIPTIONS_WORKFLOW
+_WORKFLOW_HINTS = WORKFLOW_HINTS
 
 # ── 辅助函数 ─────────────────────────────────────────────────────
 
@@ -127,7 +98,7 @@ async def _classify_async(client: AsyncOpenAI, message: str) -> dict:
     system_prompt = f"""你是法务合规部的智能助手意图分析器。只返回 JSON，不要其他内容。
 
 【工作流意图】格式：{{"intent": "意图名"}}
-{_INTENT_DESCRIPTIONS_WORKFLOW}
+{INTENT_DESCRIPTIONS_WORKFLOW}
 
 【企业查询】格式：{{"intent": "query_company", "company": "企业名称"}}
 条件：用户提及具体公司名称并想查询工商/司法等信息
@@ -151,7 +122,7 @@ waiting_files / waiting_ledger_files / waiting_auth_file / waiting_compliance_fi
             raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
         data = json.loads(raw)
         intent = data.get("intent", "other")
-        if intent not in _VALID_INTENTS:
+        if intent not in VALID_INTENTS:
             intent = "other"
         return {
             "intent": intent,
@@ -169,7 +140,7 @@ async def _stream_reply_async(client: AsyncOpenAI, message: str, history: list, 
     system_prompt = f"""你是法务合规部的智能助手，请用中文简洁友好地回答用户问题。
 
 可以引导用户使用的功能：
-{_WORKFLOW_HINTS}
+{WORKFLOW_HINTS}
 
 直接输出回复内容，不需要 JSON 格式。"""
 
@@ -373,46 +344,6 @@ class ChatRequest(BaseModel):
     vision_model: str | None = None
 
 
-# 固定意图 → 固定回复映射（直接返回，不需要额外 LLM 调用）
-INTENT_RESPONSES = {
-    "download_training_excel": (
-        "📥 正在为您打开培训统计表下载…",
-        "download_training_excel",
-    ),
-    "download_ledger_excel": (
-        "📥 正在为您打开案件台账下载…",
-        "download_ledger_excel",
-    ),
-    "download_compliance_excel": (
-        "正在为您打开合规审查工作台账下载。",
-        "download_compliance_excel",
-    ),
-    "waiting_files": (
-        "好的！请上传以下两个文件：\n\n"
-        "- 📄 **培训通知**（PDF 格式）\n"
-        "- ✍️ **签到表**（图片格式：JPG / PNG）",
-        "waiting_files",
-    ),
-    "waiting_ledger_files": (
-        "好的！请上传案件的法律文书文件（支持 **PDF / DOCX / DOC**，可多选）。\n\n"
-        "系统会自动识别文书类型，并判断是否为台账中的已有案件：\n"
-        "- 已有案件：追加审级处理结果或更新执行信息\n"
-        "- 新案件：在台账末尾新增一行",
-        "waiting_ledger_files",
-    ),
-    "waiting_auth_file": (
-        "好的！请上传**呈批件 PDF**，系统将自动提取关键信息并生成授权请示 Word 文档。\n\n"
-        "- 支持文字版 PDF（直接提取）\n"
-        "- 支持扫描版 PDF（自动 OCR 识别）",
-        "waiting_auth_file",
-    ),
-    "waiting_compliance_file": (
-        "好的！请上传 **OA 流程表单及审批记录 PDF**，系统会提取重大事项、程序、各单位审查意见、签署时间和背景材料，确认后写入长期累计合规审查工作台账。",
-        "waiting_compliance_file",
-    ),
-}
-
-
 @router.post("")
 async def chat(req: ChatRequest, user: User = Depends(get_current_user)):
     """
@@ -511,7 +442,7 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user)):
 
             # ── 通用对话（异步流式，每个 token await 后事件循环可响应其他请求）
             next_stage = cls.get("next_stage") or "idle"
-            if next_stage not in _ACTIONABLE_STAGES:
+            if next_stage not in ACTIONABLE_STAGES:
                 next_stage = "idle"
 
             accumulated = ""
