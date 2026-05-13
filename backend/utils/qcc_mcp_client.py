@@ -68,6 +68,8 @@ _DEFAULT_CATEGORIES = ["company", "risk"]
 # ── MCP 协议底层 ─────────────────────────────────────────────────────────────
 
 def _base_headers() -> dict[str, str]:
+    if not QCC_TOKEN:
+        raise RuntimeError("QCC_TOKEN 未配置，请在服务器 .env 中添加：QCC_TOKEN=<your_token>")
     return {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
