@@ -4,6 +4,7 @@ import re
 import json
 import warnings
 import httpx
+from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
 from dotenv import load_dotenv
 from docx import Document
@@ -254,6 +255,17 @@ def draft_auth_letter(info):
         rq=info.get("文件日期") or "（日期）",
     )
     return letter
+
+
+def draft_auth_documents(info):
+    """并行生成授权请示和授权书正文，减少两段生成串行等待。"""
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        request_future = executor.submit(draft_auth_request, info)
+        letter_future = executor.submit(draft_auth_letter, info)
+        return {
+            "auth_content": request_future.result(),
+            "letter_content": letter_future.result(),
+        }
 
 
 _AUTH_LEDGER_HEADERS = [

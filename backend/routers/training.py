@@ -19,6 +19,7 @@ from routers.chat import load_history, save_history
 from upload_validation import UploadValidationError, validate_image_upload, validate_pdf_upload
 from config import DATA_ROOT
 from file_store import atomic_write_bytes, safe_child_path
+from perf_trace import PerfTrace
 
 router = APIRouter(prefix="/api/training", tags=["training"])
 _TRAINING_PENDING_ROOT = Path(DATA_ROOT) / "_pending_training_uploads"
@@ -171,19 +172,29 @@ def _run_training_extraction(
     from utils.classifier import classify_training
     from utils.excel_writer import EXCEL_PATH
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        notice_path = os.path.join(tmpdir, notice_name)
-        signin_path = os.path.join(tmpdir, signin_name)
-        with open(notice_path, "wb") as f:
-            f.write(notice_bytes)
-        with open(signin_path, "wb") as f:
-            f.write(signin_bytes)
+    trace = PerfTrace("training.extract")
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            notice_path = os.path.join(tmpdir, notice_name)
+            signin_path = os.path.join(tmpdir, signin_name)
+            with trace.step("write_upload_temp_files"):
+                with open(notice_path, "wb") as f:
+                    f.write(notice_bytes)
+                with open(signin_path, "wb") as f:
+                    f.write(signin_bytes)
 
-        notice_text = extract_pdf_text(notice_path)
-        sign_in_info = count_attendees(signin_path, model=vision_model)
-        category = classify_training(notice_text, sign_in_info["topic"])
-        time_info = _extract_training_time(notice_text)
-        pending_upload_id = _create_training_pending_upload(notice_name, notice_bytes, signin_name, signin_bytes)
+            with trace.step("extract_pdf_text"):
+                notice_text = extract_pdf_text(notice_path)
+            with trace.step("count_attendees"):
+                sign_in_info = count_attendees(signin_path, model=vision_model)
+            with trace.step("classify_training"):
+                category = classify_training(notice_text, sign_in_info["topic"])
+            with trace.step("extract_training_time"):
+                time_info = _extract_training_time(notice_text)
+            with trace.step("stage_pending_archive"):
+                pending_upload_id = _create_training_pending_upload(notice_name, notice_bytes, signin_name, signin_bytes)
+    finally:
+        trace.finish()
 
     return {
         "topic": sign_in_info["topic"] or "",

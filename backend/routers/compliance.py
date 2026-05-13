@@ -18,6 +18,7 @@ from file_store import atomic_write_bytes, atomic_write_text, file_lock
 from models import User
 from routers.chat import load_history, save_history
 from upload_validation import UploadValidationError, validate_pdf_upload
+from perf_trace import PerfTrace
 from utils.compliance_ledger import (
     create_compliance_workbook,
     extract_compliance_item,
@@ -73,10 +74,18 @@ async def extract_compliance(
         raise HTTPException(status_code=400, detail=str(e))
 
     def _process() -> dict[str, Any]:
-        text = extract_pdf_text(pdf_bytes, safe_name, vision_model)
-        if not text.strip():
-            raise ValueError("未能从 PDF 中提取可识别文本")
-        return extract_compliance_item(text, load_responsible_persons())
+        trace = PerfTrace("compliance.extract", user.id)
+        try:
+            with trace.step("extract_pdf_text"):
+                text = extract_pdf_text(pdf_bytes, safe_name, vision_model)
+            if not text.strip():
+                raise ValueError("未能从 PDF 中提取可识别文本")
+            with trace.step("load_responsible_persons"):
+                persons = load_responsible_persons()
+            with trace.step("extract_compliance_item"):
+                return extract_compliance_item(text, persons)
+        finally:
+            trace.finish()
 
     try:
         item = await asyncio.to_thread(_process)
@@ -98,22 +107,26 @@ def write_compliance(
     record = normalize_extracted_item(body_data)
     txn_lock = Path(COMPLIANCE_LEDGER_JSON_PATH).with_suffix(".txn")
     with file_lock(txn_lock):
+        trace = PerfTrace("compliance.write", user.id)
         json_path = Path(COMPLIANCE_LEDGER_JSON_PATH)
         excel_path = Path(COMPLIANCE_LEDGER_EXCEL_PATH)
         old_json = json_path.read_bytes() if json_path.exists() else None
         old_excel = excel_path.read_bytes() if excel_path.exists() else None
         tmp_excel = None
         try:
-            records = load_records(json_path)
+            with trace.step("load_records"):
+                records = load_records(json_path)
             next_record = dict(record)
             next_record["sequence"] = len(records) + 1
             records.append(next_record)
             excel_path.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(suffix=".xlsx", dir=str(excel_path.parent), delete=False) as tmp:
                 tmp_excel = tmp.name
-            create_compliance_workbook(records, tmp_excel)
-            atomic_write_text(json_path, json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
-            Path(tmp_excel).replace(excel_path)
+            with trace.step("create_workbook"):
+                create_compliance_workbook(records, tmp_excel)
+            with trace.step("commit_files"):
+                atomic_write_text(json_path, json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+                Path(tmp_excel).replace(excel_path)
             sequence = records[-1].get("sequence", len(records))
         except Exception as e:
             if tmp_excel and os.path.exists(tmp_excel):
@@ -131,6 +144,8 @@ def write_compliance(
                 excel_path.unlink()
             write_log(db, user, "compliance_write_failed", f"合规审查台账写入失败：{e}", request)
             raise HTTPException(status_code=500, detail=f"合规审查台账写入失败：{e}")
+        finally:
+            trace.finish()
 
     reply = f"✅ 合规审查工作台账已更新！已新增第 {sequence} 项：{record.get('title', '')}"
     if body.session_id:

@@ -19,6 +19,7 @@ from db import get_db
 from models import User
 from llm_client import get_llm_client
 from upload_validation import UploadValidationError, validate_excel_upload
+from perf_trace import PerfTrace
 
 router = APIRouter(prefix="/api/audit")
 AUDIT_CLASSIFY_MODEL = "qwen2.5-72b"
@@ -278,11 +279,14 @@ async def analyze_audit(
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail=f"业务领域参数格式错误：{e}")
 
+    trace = PerfTrace("audit.analyze", user.id)
     try:
         content = await file.read()
         validate_excel_upload(file.filename or "", file.content_type, content)
-        wb = openpyxl.load_workbook(io.BytesIO(content))
-        rows = _extract_rows(wb)
+        with trace.step("load_workbook"):
+            wb = openpyxl.load_workbook(io.BytesIO(content))
+        with trace.step("extract_rows"):
+            rows = _extract_rows(wb)
     except UploadValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except ValueError as e:
@@ -299,21 +303,24 @@ async def analyze_audit(
         client = get_llm_client()
 
         # Step 1: 模型 A 固定用 Qwen，避免全局默认模型影响审计分类。
-        resp_a = client.chat.completions.create(
-            model=AUDIT_CLASSIFY_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-        )
-        rows_a = _parse_llm_output(resp_a.choices[0].message.content or "", rows)
+        with trace.step("model_a_classify"):
+            resp_a = client.chat.completions.create(
+                model=AUDIT_CLASSIFY_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+            )
+            rows_a = _parse_llm_output(resp_a.choices[0].message.content or "", rows)
 
         # Step 2: 模型 B 固定用 DeepSeek 逐条审查 A 的结果。
-        try:
-            corrections = _call_review_llm(rows_a, doms)
-        except Exception:
-            corrections = []  # B 失败静默降级，只返回 A 的结果
+        with trace.step("model_b_review"):
+            try:
+                corrections = _call_review_llm(rows_a, doms)
+            except Exception:
+                corrections = []  # B 失败静默降级，只返回 A 的结果
 
         # Step 3: 合并差异信息
-        return _merge_ab_results(rows_a, corrections)
+        with trace.step("merge_results"):
+            return _merge_ab_results(rows_a, corrections)
 
     try:
         classified_rows = await asyncio.to_thread(_run_full_analysis)
@@ -321,6 +328,8 @@ async def analyze_audit(
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM 调用失败：{e}")
+    finally:
+        trace.finish()
 
     disagreement_count = sum(1 for r in classified_rows if r.get("disagreement"))
     write_log(

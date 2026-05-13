@@ -2,6 +2,16 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.22',
+    date: '2026-05-13',
+    changes: [
+      { type: 'perf', text: '任务处理链路增加统一性能耗时日志：案件台账、培训统计、授权请示、合规审查、审计分析会记录关键步骤耗时，便于区分模型、OCR、PDF 解析和写文件瓶颈' },
+      { type: 'perf', text: '案件台账提取提速：多个上传文书并发解析，扫描 PDF 复用并发 OCR 通道，减少多文件、多页文书逐个等待的总耗时' },
+      { type: 'perf', text: '授权请示生成提速：授权请示正文与授权书正文并行生成，字段提取后不再串行等待两段文档输出' },
+      { type: 'fix', text: 'OCR 稳定性增强：中航信 OCR 增加超时收敛、失败计数和临时熔断，服务异常时更快降级到视觉模型，避免每页重复长时间等待' },
+    ],
+  },
+  {
     version: 'v2.21',
     date: '2026-05-12',
     changes: [

@@ -39,6 +39,88 @@ class _TrackedClient:
 
 
 class LedgerPerformanceTests(unittest.TestCase):
+    def test_ledger_extract_docs_processes_uploaded_files_concurrently(self):
+        from routers import ledger
+
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def fake_extract(_bytes, filename):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                time.sleep(0.06)
+                return f"text for {filename}"
+            finally:
+                with lock:
+                    active -= 1
+
+        files_data = [
+            {"name": "a.pdf", "bytes": b"%PDF-a"},
+            {"name": "b.pdf", "bytes": b"%PDF-b"},
+            {"name": "c.pdf", "bytes": b"%PDF-c"},
+        ]
+
+        with patch.object(ledger, "LEDGER_DOC_CONCURRENCY", 3), \
+             patch("routers.ledger.extract_file_text", side_effect=fake_extract), \
+             patch("routers.ledger.needs_ocr_text", return_value=False), \
+             patch("routers.ledger.detect_doc_type_by_content", return_value="起诉状"):
+            docs = ledger._extract_ledger_docs(files_data, "vision-model", lambda _msg: None)
+
+        self.assertEqual([doc["filename"] for doc in docs], ["a.pdf", "b.pdf", "c.pdf"])
+        self.assertGreaterEqual(max_active, 2)
+
+    def test_ocr_single_page_skips_airchina_after_circuit_breaker_opens(self):
+        import ledger_helpers
+
+        fake_client = _TrackedClient(lambda _kwargs: "vision fallback", delay=0.01)
+        with patch.object(ledger_helpers, "AIRCHINA_API_KEY", "key"), \
+             patch.object(ledger_helpers, "AIRCHINA_OCR_FAILURE_THRESHOLD", 1), \
+             patch.object(ledger_helpers, "AIRCHINA_OCR_BREAKER_SECONDS", 60), \
+             patch.object(ledger_helpers, "_ocr_page_with_airchina", side_effect=RuntimeError("down")) as airchina_mock, \
+             patch("ledger_helpers.get_llm_client", return_value=fake_client), \
+             patch("ledger_helpers.resolve_vision_model", return_value="vision-model"):
+            ledger_helpers.reset_airchina_ocr_breaker()
+            first = ledger_helpers.ocr_single_page("abc", "vision-model")
+            second = ledger_helpers.ocr_single_page("abc", "vision-model")
+            ledger_helpers.reset_airchina_ocr_breaker()
+
+        self.assertEqual(first, "vision fallback")
+        self.assertEqual(second, "vision fallback")
+        self.assertEqual(airchina_mock.call_count, 1)
+
+    def test_auth_request_documents_are_generated_in_parallel(self):
+        from utils import auth_request_drafter
+
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def tracked_result(name):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                time.sleep(0.06)
+                return name
+            finally:
+                with lock:
+                    active -= 1
+
+        with patch.object(auth_request_drafter, "draft_auth_request", side_effect=lambda info: tracked_result("request")), \
+             patch.object(auth_request_drafter, "draft_auth_letter", side_effect=lambda info: tracked_result("letter")):
+            start = time.perf_counter()
+            docs = auth_request_drafter.draft_auth_documents({"项目名称": "测试项目"})
+            elapsed = time.perf_counter() - start
+
+        self.assertEqual(docs, {"auth_content": "request", "letter_content": "letter"})
+        self.assertGreaterEqual(max_active, 2)
+        self.assertLess(elapsed, 0.11)
+
     def test_ocr_pdf_with_vision_processes_pages_concurrently_and_preserves_order(self):
         import ledger_helpers
 

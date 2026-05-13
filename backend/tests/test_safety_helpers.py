@@ -177,6 +177,21 @@ class PendingArchiveTests(unittest.TestCase):
             archive_mock.assert_called_once()
 
 
+class PerformanceTraceTests(unittest.TestCase):
+    def test_perf_trace_logs_step_and_total_duration(self):
+        from perf_trace import PerfTrace
+
+        with self.assertLogs("perf", level="INFO") as captured:
+            trace = PerfTrace("unit_flow", user_id=3)
+            with trace.step("parse_pdf"):
+                pass
+            trace.finish()
+
+        output = "\n".join(captured.output)
+        self.assertIn("perf.step flow=unit_flow step=parse_pdf user=3", output)
+        self.assertIn("perf.total flow=unit_flow user=3", output)
+
+
 class LlmClientTests(unittest.TestCase):
     def test_stream_chunk_without_choices_is_ignored(self):
         self.assertIsNone(_chunk_delta_content(SimpleNamespace(choices=[])))

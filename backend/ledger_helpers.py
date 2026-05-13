@@ -9,6 +9,8 @@ import base64
 import logging
 import shutil
 import tempfile
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
@@ -29,9 +31,52 @@ def _env_positive_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _env_positive_float(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+LEDGER_DOC_CONCURRENCY = _env_positive_int("LEDGER_DOC_CONCURRENCY", 3)
 LEDGER_LLM_CONCURRENCY = _env_positive_int("LEDGER_LLM_CONCURRENCY", 3)
 LEDGER_OCR_CONCURRENCY = _env_positive_int("LEDGER_OCR_CONCURRENCY", 2)
+AIRCHINA_OCR_TIMEOUT_SECONDS = _env_positive_float("AIRCHINA_OCR_TIMEOUT_SECONDS", 12.0)
+AIRCHINA_OCR_FAILURE_THRESHOLD = _env_positive_int("AIRCHINA_OCR_FAILURE_THRESHOLD", 3)
+AIRCHINA_OCR_BREAKER_SECONDS = _env_positive_float("AIRCHINA_OCR_BREAKER_SECONDS", 90.0)
 _AIRCHINA_OCR_CHANNEL = os.getenv("AIRCHINA_OCR_CHANNEL", "25")
+
+_AIRCHINA_BREAKER_LOCK = threading.Lock()
+_AIRCHINA_FAILURES = 0
+_AIRCHINA_OPEN_UNTIL = 0.0
+
+
+def reset_airchina_ocr_breaker() -> None:
+    global _AIRCHINA_FAILURES, _AIRCHINA_OPEN_UNTIL
+    with _AIRCHINA_BREAKER_LOCK:
+        _AIRCHINA_FAILURES = 0
+        _AIRCHINA_OPEN_UNTIL = 0.0
+
+
+def _airchina_ocr_available() -> bool:
+    with _AIRCHINA_BREAKER_LOCK:
+        return time.monotonic() >= _AIRCHINA_OPEN_UNTIL
+
+
+def _record_airchina_success() -> None:
+    global _AIRCHINA_FAILURES, _AIRCHINA_OPEN_UNTIL
+    with _AIRCHINA_BREAKER_LOCK:
+        _AIRCHINA_FAILURES = 0
+        _AIRCHINA_OPEN_UNTIL = 0.0
+
+
+def _record_airchina_failure() -> None:
+    global _AIRCHINA_FAILURES, _AIRCHINA_OPEN_UNTIL
+    with _AIRCHINA_BREAKER_LOCK:
+        _AIRCHINA_FAILURES += 1
+        if _AIRCHINA_FAILURES >= AIRCHINA_OCR_FAILURE_THRESHOLD:
+            _AIRCHINA_OPEN_UNTIL = time.monotonic() + AIRCHINA_OCR_BREAKER_SECONDS
 
 
 # ── 提取文书文字 ──────────────────────────────────────────────
@@ -141,7 +186,7 @@ def _ocr_page_with_airchina(page_index: int, img_b64: str) -> tuple[int, str]:
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        with httpx.Client(verify=AI_HTTP_VERIFY_SSL, timeout=30, follow_redirects=True) as client:
+        with httpx.Client(verify=AI_HTTP_VERIFY_SSL, timeout=AIRCHINA_OCR_TIMEOUT_SECONDS, follow_redirects=True) as client:
             resp = client.post(url, headers=headers, json=body)
     resp.raise_for_status()
 
@@ -195,7 +240,7 @@ def ocr_pdf_with_vision(pdf_bytes: bytes, model: str | None = None) -> str:
     max_workers = min(max(1, LEDGER_OCR_CONCURRENCY), len(page_images))
 
     # 优先：中航信专用 OCR
-    if AIRCHINA_API_KEY:
+    if AIRCHINA_API_KEY and _airchina_ocr_available():
         try:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [
@@ -207,11 +252,16 @@ def ocr_pdf_with_vision(pdf_bytes: bytes, model: str | None = None) -> str:
                     texts[idx] = text
             combined = "\n".join(t for t in texts if t)
             if combined.strip():
+                _record_airchina_success()
                 return combined
+            _record_airchina_failure()
             logging.warning("中航信 OCR 返回空文本，降级视觉模型")
         except Exception as e:
+            _record_airchina_failure()
             logging.warning("中航信 OCR 失败，降级视觉模型：%s", e)
             texts = [""] * len(page_images)
+    elif AIRCHINA_API_KEY:
+        logging.warning("中航信 OCR 熔断中，直接降级视觉模型")
 
     # 降级：视觉模型
     client = get_llm_client()
@@ -235,14 +285,19 @@ def render_pdf_pages(pdf_bytes: bytes) -> list[str]:
 
 def ocr_single_page(img_b64: str, model: str | None = None) -> str:
     """OCR 单页图片：优先中航信专用 OCR，失败则降级视觉模型。"""
-    if AIRCHINA_API_KEY:
+    if AIRCHINA_API_KEY and _airchina_ocr_available():
         try:
             _, text = _ocr_page_with_airchina(0, img_b64)
             if text.strip():
+                _record_airchina_success()
                 return text
+            _record_airchina_failure()
             logging.warning("中航信 OCR 返回空文本，降级视觉模型")
         except Exception as e:
+            _record_airchina_failure()
             logging.warning("中航信 OCR 失败，降级视觉模型：%s", e)
+    elif AIRCHINA_API_KEY:
+        logging.warning("中航信 OCR 熔断中，直接降级视觉模型")
 
     client = get_llm_client()
     selected_model = resolve_vision_model(model)

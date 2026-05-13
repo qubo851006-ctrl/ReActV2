@@ -5,6 +5,7 @@ import secrets
 import shutil
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator, Any
@@ -22,12 +23,14 @@ from file_store import atomic_write_bytes, atomic_write_text, file_lock, safe_ch
 
 from config import LEDGER_JSON_PATH, LEDGER_EXCEL_PATH, LEDGER_OUTPUT_DIR
 from ledger_helpers import (
-    extract_file_text, render_pdf_pages, ocr_single_page, needs_ocr_text,
+    LEDGER_DOC_CONCURRENCY,
+    extract_file_text, ocr_pdf_with_vision, needs_ocr_text,
     detect_doc_type_by_content,
     extract_case_fields, load_cases_json, save_cases_json,
     find_matching_case_idx, merge_case_data, archive_legal_docs,
     validate_legal_upload,
 )
+from perf_trace import PerfTrace
 from routers.chat import load_history, save_history
 
 router = APIRouter(prefix="/api/ledger", tags=["ledger"])
@@ -81,6 +84,43 @@ def _commit_pending_archive(user_id: int, pending_id: str, case_name: str) -> st
     return archive_dir
 
 
+def _process_ledger_file(fd: dict, vision_model: str) -> dict:
+    text = extract_file_text(fd["bytes"], fd["name"])
+    is_pdf = os.path.splitext(fd["name"])[1].lower() == ".pdf"
+    used_ocr = False
+    if is_pdf and needs_ocr_text(text):
+        text = ocr_pdf_with_vision(fd["bytes"], model=vision_model)
+        used_ocr = True
+    doc_type = detect_doc_type_by_content(text) if text else "其他"
+    return {
+        "filename": fd["name"],
+        "text": text,
+        "doc_type": doc_type,
+        "used_ocr": used_ocr,
+    }
+
+
+def _extract_ledger_docs(files_data: list[dict], vision_model: str, status_fn=None) -> list[dict]:
+    docs: list[dict | None] = [None] * len(files_data)
+    max_workers = min(max(1, LEDGER_DOC_CONCURRENCY), len(files_data) or 1)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_process_ledger_file, fd, vision_model): (idx, fd)
+            for idx, fd in enumerate(files_data)
+        }
+        for future in as_completed(futures):
+            idx, fd = futures[future]
+            doc = future.result()
+            docs[idx] = doc
+            if status_fn:
+                ocr_text = "，已触发 OCR" if doc.get("used_ocr") else ""
+                status_fn(
+                    f"→ `{fd['name']}` 提取到 **{len(doc.get('text') or '')}** 字符，"
+                    f"文书类型：**{doc.get('doc_type') or '其他'}**{ocr_text}"
+                )
+    return [doc for doc in docs if doc is not None]
+
+
 # ── 提取（SSE 流式，不写入）──────────────────────────────────
 
 @router.post("/extract")
@@ -104,6 +144,7 @@ async def extract_ledger(
 
     async def event_stream() -> AsyncGenerator[str, None]:
         overall_start = time.perf_counter()
+        trace = PerfTrace("ledger.extract", user.id)
 
         def used_since(start: float) -> str:
             return f"{time.perf_counter() - start:.1f}s"
@@ -114,46 +155,31 @@ async def extract_ledger(
         def send_error(msg: str) -> str:
             return f"data: {json.dumps({'error': msg}, ensure_ascii=False)}\n\n"
 
-        # Step 1: 提取文字（阻塞 I/O + OCR 卸载到线程池）
-        docs = []
-        for fd in files_data:
-            yield send(f"**Step 1** 📄 提取文字：`{fd['name']}`")
-            text_start = time.perf_counter()
-            text = await asyncio.to_thread(extract_file_text, fd["bytes"], fd["name"])
-            yield send(f"→ 提取到 **{len(text)}** 字符，用时 {used_since(text_start)}")
-            is_pdf = os.path.splitext(fd["name"])[1].lower() == ".pdf"
-            if is_pdf and needs_ocr_text(text):
-                if text:
-                    yield send("→ PDF 文字层质量较低，启动 OCR…")
-                else:
-                    yield send("→ 扫描件，启动 OCR…")
-                try:
-                    ocr_start = time.perf_counter()
-                    pages = await asyncio.to_thread(render_pdf_pages, fd["bytes"])
-                    yield send(f"→ 共 **{len(pages)}** 页，逐页识别中…")
-                    page_texts: list[str] = []
-                    for i, img_b64 in enumerate(pages):
-                        page_text = await asyncio.to_thread(ocr_single_page, img_b64, vision_model)
-                        page_texts.append(page_text)
-                        yield send(f"→ 第 {i + 1}/{len(pages)} 页完成")
-                    text = "\n".join(t for t in page_texts if t)
-                    yield send(f"→ OCR 提取到 **{len(text)}** 字符，用时 {used_since(ocr_start)}")
-                except Exception as e:
-                    text = ""
-                    yield send(f"⚠️ OCR 失败：{e}")
-            type_start = time.perf_counter()
-            doc_type = await asyncio.to_thread(detect_doc_type_by_content, text) if text else "其他"
-            yield send(f"→ 文书类型：**{doc_type}**，用时 {used_since(type_start)}")
-            docs.append({"filename": fd["name"], "text": text, "doc_type": doc_type})
+        # Step 1: 并发提取文字 / OCR / 文书类型
+        yield send(f"**Step 1** 📄 并发提取文字与识别文书类型（{len(files_data)} 个文件）…")
+        doc_status: list[str] = []
+        text_start = time.perf_counter()
+        with trace.step("extract_docs"):
+            docs = await asyncio.to_thread(
+                _extract_ledger_docs,
+                files_data,
+                vision_model,
+                doc_status.append,
+            )
+        for msg in doc_status:
+            yield send(msg)
+        yield send(f"→ 文件处理完成，用时 {used_since(text_start)}")
 
         if not any((doc.get("text") or "").strip() for doc in docs):
             yield send_error("OCR 未识别到可用于案件台账生成的正文，请检查扫描件清晰度或 OCR 服务配置后重试。")
+            trace.finish()
             return
 
         # Step 2: AI 提取字段（阻塞 LLM 调用卸载到线程池）
         yield send("**Step 2** 🤖 AI 抽取案件字段…")
         fields_start = time.perf_counter()
-        new_case = await asyncio.to_thread(extract_case_fields, docs, lambda m: None)
+        with trace.step("extract_case_fields"):
+            new_case = await asyncio.to_thread(extract_case_fields, docs, lambda m: None)
         yield send(f"→ AI 字段提取完成，用时 {used_since(fields_start)}")
         yield send(f"→ 案件名称：**{new_case.get('案件名称') or '（未提取到）'}**")
         yield send(f"→ 案由：**{new_case.get('案由') or '（未提取到）'}**")
@@ -162,8 +188,9 @@ async def extract_ledger(
         # Step 3: 比对台账（可能含 LLM 调用，卸载到线程池）
         yield send("**Step 3** 🔍 比对现有台账…")
         match_start = time.perf_counter()
-        existing_cases = await asyncio.to_thread(load_cases_json)
-        match_idx = await asyncio.to_thread(find_matching_case_idx, new_case, existing_cases, docs)
+        with trace.step("match_existing_ledger"):
+            existing_cases = await asyncio.to_thread(load_cases_json)
+            match_idx = await asyncio.to_thread(find_matching_case_idx, new_case, existing_cases, docs)
         yield send(f"→ 台账匹配完成，用时 {used_since(match_start)}")
         yield send(f"→ {'匹配到第 ' + str(match_idx + 1) + ' 条记录' if match_idx is not None else '未匹配，将新增'}")
 
@@ -185,10 +212,12 @@ async def extract_ledger(
         # Step 5: 暂存待归档文书，确认写入后再进入正式归档目录。
         yield send("📁 暂存待归档文书…")
         archive_start = time.perf_counter()
-        pending_archive_id = await asyncio.to_thread(_create_pending_upload, user.id, files_data, docs)
+        with trace.step("stage_pending_archive"):
+            pending_archive_id = await asyncio.to_thread(_create_pending_upload, user.id, files_data, docs)
         yield send(f"→ 已暂存，用时 {used_since(archive_start)}")
 
         yield send(f"✅ 提取完成，总用时 {used_since(overall_start)}，等待确认…")
+        trace.finish()
 
         preview_payload = {
             "preview": True,
