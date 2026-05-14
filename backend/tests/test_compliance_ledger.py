@@ -209,6 +209,72 @@ class ComplianceLedgerRowsTests(unittest.TestCase):
         self.assertIn("会签单位（财务部）", review_units)
         self.assertNotIn("会签单位（人力资源部）", review_units)
 
+    def test_countersign_filters_to_configured_department_heads(self):
+        responsible_persons = {
+            "财务部": "杨焕",
+            "西南分公司（四川中航物业）": "张虎",
+            "党群办公室/董事会办公室/行政办公室": "刘芳",
+        }
+        item = normalize_extracted_item({
+            "title": "关于测试事项的请示",
+            "procedure": "总办会审议",
+            "countersign": [
+                {
+                    "department": "西南分公司（四川中航物业） 直属",
+                    "person": "张虎",
+                    "time": "2026-05-09 09:53:27",
+                    "opinion_text": "已阅。",
+                },
+                {
+                    "department": "西南分公司（四川中航物业）",
+                    "person": "王永君",
+                    "time": "2026-05-09 09:35:13",
+                    "opinion_text": "已核。",
+                },
+                {
+                    "department": "财务部",
+                    "person": "杨焕",
+                    "time": "2026-05-09 15:08:46",
+                    "opinion_text": "拟同意。",
+                },
+            ],
+        }, responsible_persons)
+
+        review_units = [row["review_unit"] for row in item["review_rows"]]
+
+        self.assertEqual(review_units, ["会签单位（西南分公司（四川中航物业））", "会签单位（财务部）"])
+
+    def test_approval_entries_can_fill_missing_countersign_for_configured_head_only_when_from_countersign_section(self):
+        responsible_persons = {
+            "人力资源部": "陈锐",
+            "党群办公室/董事会办公室/行政办公室": "刘芳",
+        }
+        item = normalize_extracted_item({
+            "title": "关于测试事项的请示",
+            "procedure": "总办会审议",
+            "approval_entries": [
+                {
+                    "department": "党群办公室/董事会办公室/行政办公室",
+                    "person": "刘芳",
+                    "time": "2026-05-11 09:49:20",
+                    "opinion_text": "已阅。",
+                    "source_section": "会签",
+                },
+                {
+                    "department": "人力资源部",
+                    "person": "陈锐",
+                    "time": "2026-05-11 09:50:00",
+                    "opinion_text": "同意。",
+                    "source_section": "审批流转",
+                },
+            ],
+        }, responsible_persons)
+
+        review_units = [row["review_unit"] for row in item["review_rows"]]
+
+        self.assertIn("会签单位（党群办公室/董事会办公室/行政办公室）", review_units)
+        self.assertNotIn("会签单位（人力资源部）", review_units)
+
 
 class ComplianceLedgerWorkbookTests(unittest.TestCase):
     def test_create_workbook_merges_matter_columns_and_expands_review_rows(self):

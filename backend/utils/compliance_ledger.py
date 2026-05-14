@@ -154,12 +154,42 @@ def _is_compliance_department(department: str, person: str, persons: dict[str, s
     return bool(configured and _normalize_person_name(person) == configured)
 
 
+def _configured_department_for_person(department: str, person: str, persons: dict[str, str]) -> str | None:
+    dept_key = re.sub(r"\s+", "", department)
+    person_key = _normalize_person_name(person)
+    for configured_dept, configured_person in persons.items():
+        normalized_dept = re.sub(r"\s+", "", configured_dept)
+        normalized_person = _normalize_person_name(configured_person)
+        if not normalized_person or person_key != normalized_person:
+            continue
+        if normalized_dept == "审计部/法务合规部":
+            return None
+        if normalized_dept == dept_key or normalized_dept in dept_key or dept_key in normalized_dept:
+            return configured_dept
+    return None
+
+
+def _is_countersign_section(entry: dict[str, Any]) -> bool:
+    section = str(
+        entry.get("source_section")
+        or entry.get("section")
+        or entry.get("source")
+        or ""
+    )
+    return "会签" in section
+
+
 def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dict[str, Any]:
     entries = raw.get("approval_entries") or raw.get("approvals") or []
     if not isinstance(entries, list):
         return raw
 
     next_raw = dict(raw)
+    countersign_by_department = {
+        re.sub(r"\s+", "", str(entry.get("department") or "")): entry
+        for entry in (next_raw.get("countersign") or [])
+        if isinstance(entry, dict)
+    }
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -170,15 +200,45 @@ def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dic
             next_raw["chief"] = item
         elif _is_compliance_department(department, person, persons):
             next_raw["compliance"] = item
+        elif _is_countersign_section(entry):
+            configured_dept = _configured_department_for_person(department, person, persons)
+            if configured_dept:
+                dept_key = re.sub(r"\s+", "", configured_dept)
+                countersign_item = dict(item)
+                countersign_item["department"] = configured_dept
+                countersign_by_department[dept_key] = countersign_item
+
+    if countersign_by_department:
+        next_raw["countersign"] = list(countersign_by_department.values())
 
     return next_raw
 
 
-def build_review_rows(item: dict[str, Any]) -> list[dict[str, str]]:
+def _filtered_countersign_entries(countersign: Any, persons: dict[str, str]) -> list[dict[str, Any]]:
+    if not isinstance(countersign, list):
+        return []
+    filtered: dict[str, dict[str, Any]] = {}
+    for entry in countersign:
+        if not isinstance(entry, dict):
+            continue
+        configured_dept = _configured_department_for_person(
+            _clean_text(entry.get("department"), ""),
+            _clean_text(entry.get("person") or entry.get("signer"), ""),
+            persons,
+        )
+        if configured_dept:
+            next_entry = dict(entry)
+            next_entry["department"] = configured_dept
+            filtered[re.sub(r"\s+", "", configured_dept)] = next_entry
+    return list(filtered.values())
+
+
+def build_review_rows(item: dict[str, Any], responsible_persons: dict[str, str] | None = None) -> list[dict[str, str]]:
+    persons = responsible_persons or load_responsible_persons()
     rows: list[dict[str, str]] = []
     chief = item.get("chief") or {}
     compliance = item.get("compliance") or {}
-    countersign = item.get("countersign") or []
+    countersign = _filtered_countersign_entries(item.get("countersign") or [], persons)
     undertaking = item.get("undertaking") or {}
 
     if chief:
@@ -214,7 +274,7 @@ def normalize_extracted_item(raw: dict[str, Any], responsible_persons: dict[str,
         "procedure": _normalize_procedure(raw.get("procedure") or raw.get("程序")),
         "undertaking_department": "法务合规部",
         "background_materials": [re.sub(r"\.(pdf|docx?|xlsx?|xls)$", "", x, flags=re.IGNORECASE) for x in background_items],
-        "review_rows": raw.get("review_rows") or build_review_rows(raw),
+        "review_rows": raw.get("review_rows") or build_review_rows(raw, responsible_persons),
         "warnings": raw.get("warnings") or [],
     }
 
