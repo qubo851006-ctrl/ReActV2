@@ -16,6 +16,7 @@ from file_store import atomic_write_text, file_lock
 
 COMPLIANCE_EXTRACT_MODEL = "qwen2.5-72b"
 COMPLIANCE_REVIEW_MODEL = "DeepSeek-V3"
+CHIEF_COMPLIANCE_PERSON = "胡鹏斌"
 
 DEFAULT_RESPONSIBLE_PERSONS = {
     "规划与资产部/深化改革领导小组办公室": "富小鹏",
@@ -69,7 +70,23 @@ def normalize_review_opinion(opinion_text: str | None) -> str:
     text = re.sub(r"\s+", "", opinion_text or "")
     if any(word in text for word in ["不同意", "不予同意", "暂不同意"]):
         return "不予同意"
-    if any(word in text for word in ["建议", "补充", "完善", "修改", "调整", "需进一步", "请进一步"]):
+    if ("同意" in text or "拟同意" in text) and re.search(r"建议(提交|提请|报|上报).{0,20}(会议|审议)", text):
+        return "同意"
+    supplement_patterns = [
+        "建议补充",
+        "建议完善",
+        "补充完善",
+        "修改完善",
+        "补充材料",
+        "补充依据",
+        "请补充",
+        "需补充",
+        "请进一步完善",
+        "需进一步完善",
+        "建议调整",
+        "建议修改",
+    ]
+    if any(word in text for word in supplement_patterns):
         return "建议补充完善"
     return "同意"
 
@@ -114,6 +131,54 @@ def _row_from(role: str, item: dict[str, Any], department: str | None = None) ->
     }
 
 
+def _normalize_person_name(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or ""))
+
+
+def _approval_entry_to_item(entry: dict[str, Any]) -> dict[str, str]:
+    return {
+        "department": _clean_text(entry.get("department"), ""),
+        "person": _clean_text(entry.get("person") or entry.get("signer"), ""),
+        "time": _clean_text(entry.get("time") or entry.get("signed_at"), ""),
+        "opinion_text": _clean_text(entry.get("opinion_text") or entry.get("opinion"), ""),
+        "detail": _clean_text(entry.get("detail"), ""),
+        "implementation": _clean_text(entry.get("implementation"), "/"),
+    }
+
+
+def _is_compliance_department(department: str, person: str, persons: dict[str, str]) -> bool:
+    dept = re.sub(r"\s+", "", department)
+    if "审计部" in dept or "法务合规部" in dept:
+        return True
+    configured = _normalize_person_name(persons.get("审计部/法务合规部"))
+    return bool(configured and _normalize_person_name(person) == configured)
+
+
+def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dict[str, Any]:
+    entries = raw.get("approval_entries") or raw.get("approvals") or []
+    if not isinstance(entries, list):
+        return raw
+
+    next_raw = dict(raw)
+    countersign: list[dict[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        item = _approval_entry_to_item(entry)
+        person = item.get("person", "")
+        department = item.get("department", "")
+        if _normalize_person_name(person) == CHIEF_COMPLIANCE_PERSON:
+            next_raw["chief"] = item
+        elif _is_compliance_department(department, person, persons):
+            next_raw["compliance"] = item
+        elif item.get("opinion_text"):
+            countersign.append(item)
+
+    if countersign:
+        next_raw["countersign"] = countersign
+    return next_raw
+
+
 def build_review_rows(item: dict[str, Any]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     chief = item.get("chief") or {}
@@ -141,7 +206,9 @@ def _normalize_procedure(value: Any) -> str:
     return "总办会审议"
 
 
-def normalize_extracted_item(raw: dict[str, Any]) -> dict[str, Any]:
+def normalize_extracted_item(raw: dict[str, Any], responsible_persons: dict[str, str] | None = None) -> dict[str, Any]:
+    if raw.get("approval_entries") or raw.get("approvals"):
+        raw = _apply_approval_entries(raw, responsible_persons or load_responsible_persons())
     background = raw.get("background_materials") or raw.get("attachments") or []
     if isinstance(background, str):
         background_items = [background]
@@ -196,10 +263,12 @@ def _build_extract_prompt(text: str, persons: dict[str, str]) -> str:
 3. undertaking 取“拟稿单位意见”中对应部门负责人的意见。
 4. countersign 取会签意见中除“审计部/法务合规部”以外的部门负责人意见；多个部门逐个返回。
 5. compliance 取会签意见中的“审计部/法务合规部”负责人意见。
-6. chief 取胡鹏斌意见。
-7. 每个意见对象包含 department、person、time、opinion_text、detail、implementation。
-8. implementation 只能填“/”“已按要求补充完善”“未见落实”“不涉及”。
-9. attachments 提取正文附件列表中的附件名称，去掉 PDF/DOC/XLS 等后缀。
+6. chief 只能取签署人为“胡鹏斌”的那一条意见；不得合并其他领导、其他部门、相邻行的意见。
+7. approval_entries 逐条列出 OA 中每条独立审批意见，每条必须包含 department、person、time、opinion_text；不得把两个签署人的意见合并成一条。
+8. 每个意见对象包含 department、person、time、opinion_text、detail、implementation。
+9. “拟同意，建议提交/提请……会议审议”属于同意类意见，不属于“建议补充完善”。
+10. implementation 只能填“/”“已按要求补充完善”“未见落实”“不涉及”。
+11. attachments 提取正文附件列表中的附件名称，去掉 PDF/DOC/XLS 等后缀。
 
 只返回 JSON 对象，格式如下：
 {{
@@ -207,6 +276,7 @@ def _build_extract_prompt(text: str, persons: dict[str, str]) -> str:
   "procedure": "董事会审议",
   "attachments": [],
   "undertaking": {{"department": "", "person": "", "time": "", "opinion_text": "", "detail": "", "implementation": "/"}},
+  "approval_entries": [],
   "countersign": [],
   "compliance": {{"department": "审计部/法务合规部", "person": "", "time": "", "opinion_text": "", "detail": "", "implementation": "/"}},
   "chief": {{"person": "胡鹏斌", "time": "", "opinion_text": "", "detail": "", "implementation": "/"}},
@@ -224,7 +294,9 @@ def _build_review_prompt(text: str, persons: dict[str, str], extracted: dict[str
 1. 重点校验重大事项标题、董事会/总办会程序、承办单位意见、会签单位意见、合规管理牵头部门意见、首席合规官意见、签署时间、背景材料。
 2. 如模型 A 漏提或错提，请直接修正为最终可写入台账的 JSON。
 3. 返回格式必须与模型 A JSON 完全一致，只返回 JSON 对象，不要解释文字。
-4. 不确定但不影响填表的内容，可在 warnings 中追加提示。
+4. 每条审批意见必须按签署人独立校验，首席合规官只能取胡鹏斌本人意见，不得混入其他领导意见。
+5. “拟同意，建议提交/提请……会议审议”应视为同意类意见，不应改成建议补充完善。
+6. 不确定但不影响填表的内容，可在 warnings 中追加提示。
 
 部门负责人配置：
 {json.dumps(persons, ensure_ascii=False, indent=2)}
@@ -270,7 +342,7 @@ def extract_compliance_item(text: str, responsible_persons: dict[str, str] | Non
     except Exception as exc:
         reviewed = _append_warning(extracted, f"DeepSeek 校验失败，已保留 Qwen 提取结果：{exc}")
 
-    return normalize_extracted_item(reviewed)
+    return normalize_extracted_item(reviewed, persons)
 
 
 def load_records(path: str | Path = COMPLIANCE_LEDGER_JSON_PATH) -> list[dict[str, Any]]:

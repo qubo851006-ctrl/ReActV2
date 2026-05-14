@@ -17,6 +17,7 @@ from utils.compliance_ledger import (  # noqa: E402
     create_compliance_workbook,
     extract_compliance_item,
     load_responsible_persons,
+    normalize_extracted_item,
     normalize_review_opinion,
     save_responsible_persons,
 )
@@ -66,6 +67,9 @@ class ComplianceLedgerOpinionTests(unittest.TestCase):
 
     def test_normalize_review_opinion_defaults_to_agree(self):
         self.assertEqual(normalize_review_opinion("拟同意。"), "同意")
+
+    def test_normalize_review_opinion_treats_meeting_submission_suggestion_as_agree(self):
+        self.assertEqual(normalize_review_opinion("拟同意，建议提交总经理办公会议审议。"), "同意")
 
 
 class ComplianceLedgerRowsTests(unittest.TestCase):
@@ -118,6 +122,37 @@ class ComplianceLedgerRowsTests(unittest.TestCase):
         self.assertEqual(rows[2]["review_opinion"], "建议补充完善")
         self.assertEqual(rows[2]["detail"], "建议补充人员安排。")
         self.assertEqual(rows[2]["implementation"], "已按要求补充完善")
+
+    def test_approval_entries_assign_chief_by_signer_without_merging_neighbor_opinion(self):
+        item = normalize_extracted_item({
+            "title": "关于测试事项的请示",
+            "procedure": "总办会审议",
+            "approval_entries": [
+                {
+                    "department": "中航建设直属",
+                    "person": "徐勤",
+                    "time": "2026-05-11 10:40:42",
+                    "opinion_text": "同意提交总办会审议。请履行会前传签程序。",
+                },
+                {
+                    "department": "中航建设直属",
+                    "person": "胡鹏斌",
+                    "time": "2026-05-11 10:21:13",
+                    "opinion_text": "拟同意，建议提交总经理办公会议审议。",
+                },
+            ],
+            "warnings": [],
+        })
+
+        rows = item["review_rows"]
+        chief_rows = [row for row in rows if row["review_unit"] == "首席合规官"]
+
+        self.assertEqual(len(chief_rows), 1)
+        self.assertEqual(chief_rows[0]["review_time"], "2026-05-11 10:21:13")
+        self.assertEqual(chief_rows[0]["review_opinion"], "同意")
+        self.assertEqual(chief_rows[0]["detail"], "/")
+        self.assertNotIn("徐勤", json.dumps(chief_rows[0], ensure_ascii=False))
+        self.assertNotIn("请履行会前传签程序", json.dumps(chief_rows[0], ensure_ascii=False))
 
 
 class ComplianceLedgerWorkbookTests(unittest.TestCase):

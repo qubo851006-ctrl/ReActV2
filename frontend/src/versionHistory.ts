@@ -2,6 +2,14 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.25',
+    date: '2026-05-14',
+    changes: [
+      { type: 'fix', text: '合规审查台账审批意见识别优化：按签署人独立提取审批意见，首席合规官只取胡鹏斌本人意见，避免混入相邻领导意见' },
+      { type: 'fix', text: '合规审查意见分类优化：“拟同意，建议提交/提请会议审议”按同意处理，不再误判为建议补充完善' },
+    ],
+  },
+  {
     version: 'v2.24',
     date: '2026-05-13',
     changes: [
