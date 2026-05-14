@@ -153,6 +153,61 @@ class ComplianceLedgerRowsTests(unittest.TestCase):
         self.assertEqual(chief_rows[0]["detail"], "/")
         self.assertNotIn("徐勤", json.dumps(chief_rows[0], ensure_ascii=False))
         self.assertNotIn("请履行会前传签程序", json.dumps(chief_rows[0], ensure_ascii=False))
+        self.assertNotIn("会签单位（中航建设直属）", [row["review_unit"] for row in rows])
+
+    def test_approval_entries_ignore_unknown_workflow_nodes_as_countersign_units(self):
+        item = normalize_extracted_item({
+            "title": "关于测试事项的请示",
+            "procedure": "总办会审议",
+            "approval_entries": [
+                {
+                    "department": "中航建设直属",
+                    "person": f"经办人{i}",
+                    "time": f"2026-05-11 {10 + i}:00:00",
+                    "opinion_text": "同意。",
+                }
+                for i in range(6)
+            ] + [
+                {
+                    "department": "人力资源部",
+                    "person": "陈锐",
+                    "time": "2026-05-11 17:00:00",
+                    "opinion_text": "同意。",
+                }
+            ],
+        })
+
+        review_units = [row["review_unit"] for row in item["review_rows"]]
+
+        self.assertNotIn("会签单位（人力资源部）", review_units)
+        self.assertNotIn("会签单位（中航建设直属）", review_units)
+
+    def test_countersign_units_only_come_from_explicit_countersign_field(self):
+        item = normalize_extracted_item({
+            "title": "关于测试事项的请示",
+            "procedure": "总办会审议",
+            "approval_entries": [
+                {
+                    "department": "人力资源部",
+                    "person": "陈锐",
+                    "time": "2026-05-11 17:00:00",
+                    "opinion_text": "同意。",
+                },
+            ],
+            "countersign": [
+                {
+                    "department": "财务部",
+                    "person": "杨焕",
+                    "time": "2026-05-11 18:00:00",
+                    "opinion_text": "同意。",
+                },
+            ],
+        })
+
+        review_units = [row["review_unit"] for row in item["review_rows"]]
+
+        self.assertIn("会签单位（财务部）", review_units)
+        self.assertNotIn("会签单位（人力资源部）", review_units)
 
 
 class ComplianceLedgerWorkbookTests(unittest.TestCase):

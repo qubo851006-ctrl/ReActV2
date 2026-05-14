@@ -160,7 +160,6 @@ def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dic
         return raw
 
     next_raw = dict(raw)
-    countersign: list[dict[str, str]] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -171,11 +170,7 @@ def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dic
             next_raw["chief"] = item
         elif _is_compliance_department(department, person, persons):
             next_raw["compliance"] = item
-        elif item.get("opinion_text"):
-            countersign.append(item)
 
-    if countersign:
-        next_raw["countersign"] = countersign
     return next_raw
 
 
