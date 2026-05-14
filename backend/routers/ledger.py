@@ -133,6 +133,8 @@ async def extract_ledger(
     流式提取案件信息、比对台账、归档文书，但不写入 cases.json / Excel。
     SSE 最终事件携带 preview 数据供前端展示确认。
     """
+    # 提前捕获 user.id，避免在 SSE 生成器内访问已关闭的数据库会话
+    user_id = user.id
     files_data = []
     for f in files:
         b = await f.read()
@@ -144,7 +146,7 @@ async def extract_ledger(
 
     async def event_stream() -> AsyncGenerator[str, None]:
         overall_start = time.perf_counter()
-        trace = PerfTrace("ledger.extract", user.id)
+        trace = PerfTrace("ledger.extract", user_id)
 
         def used_since(start: float) -> str:
             return f"{time.perf_counter() - start:.1f}s"
@@ -213,7 +215,7 @@ async def extract_ledger(
         yield send("📁 暂存待归档文书…")
         archive_start = time.perf_counter()
         with trace.step("stage_pending_archive"):
-            pending_archive_id = await asyncio.to_thread(_create_pending_upload, user.id, files_data, docs)
+            pending_archive_id = await asyncio.to_thread(_create_pending_upload, user_id, files_data, docs)
         yield send(f"→ 已暂存，用时 {used_since(archive_start)}")
 
         yield send(f"✅ 提取完成，总用时 {used_since(overall_start)}，等待确认…")
