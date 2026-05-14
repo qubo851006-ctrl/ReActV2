@@ -193,6 +193,7 @@ export async function writeLedger(
   matchIdx: number | null,
   archiveDir: string,
   pendingArchiveId = '',
+  existingArchiveName = '',
 ): Promise<{ ok: boolean; case_count: number; reply: string; archive_dir: string }> {
   const r = await apiFetch(`${BASE}/ledger/write`, {
     method: 'POST',
@@ -201,6 +202,7 @@ export async function writeLedger(
       case_data: caseData,
       match_idx: matchIdx,
       archive_dir: archiveDir,
+      existing_archive_name: existingArchiveName,
       pending_archive_id: pendingArchiveId,
       session_id: _sid,
     }),

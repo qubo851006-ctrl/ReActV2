@@ -487,6 +487,96 @@ class OllamaModelLabelTests(unittest.TestCase):
             self.assertEqual(routes["default_vision_model"], "qwen3-vl:8b")
 
 
+class LedgerArchiveSameCaseTests(unittest.TestCase):
+    """同一案件的文书应归档到同一文件夹，不因案件名称差异产生多个文件夹。"""
+
+    def test_matched_case_uses_existing_name_for_archive(self):
+        """匹配到已有案件时，_commit_pending_archive 使用已有案件名称归档。"""
+        from routers import ledger
+
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            archive_calls = []
+
+            def fake_archive(files_data, docs, case_name):
+                archive_calls.append(case_name)
+                return str(Path(tmpdir) / case_name)
+
+            with patch.object(ledger, "_PENDING_UPLOAD_ROOT", Path(tmpdir)), \
+                 patch("routers.ledger.archive_legal_docs", side_effect=fake_archive):
+                pending_id = ledger._create_pending_upload(
+                    1,
+                    [{"name": "二审判决书.pdf", "bytes": b"%PDF"}],
+                    [{"doc_type": "二审判决书"}],
+                )
+                # 模拟：已有案件名称为"甲公司诉乙公司合同纠纷案"
+                existing_name = "甲公司诉乙公司合同纠纷案"
+                ledger._commit_pending_archive(1, pending_id, existing_name)
+
+            self.assertEqual(archive_calls, [existing_name])
+
+    def test_archive_reuses_existing_folder(self):
+        """同一 case_name 多次调用 archive_legal_docs 应写入同一文件夹。"""
+        import ledger_helpers
+
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            with patch.object(ledger_helpers, "LEGAL_ARCHIVE_ROOT", tmpdir):
+                dir1 = ledger_helpers.archive_legal_docs(
+                    [{"name": "起诉状.pdf", "bytes": b"%PDF-1"}],
+                    [{"doc_type": "起诉状"}],
+                    "甲公司诉乙公司合同纠纷案",
+                )
+                dir2 = ledger_helpers.archive_legal_docs(
+                    [{"name": "判决书.pdf", "bytes": b"%PDF-2"}],
+                    [{"doc_type": "一审判决书"}],
+                    "甲公司诉乙公司合同纠纷案",
+                )
+
+            self.assertEqual(dir1, dir2)
+            files = list(Path(dir1).iterdir())
+            self.assertEqual(len(files), 2)
+            names = sorted(f.name for f in files)
+            self.assertIn("起诉状_起诉状.pdf", names)
+            self.assertIn("一审判决书_判决书.pdf", names)
+
+    def test_different_case_names_create_separate_folders(self):
+        """不同案件名称应产生不同文件夹。"""
+        import ledger_helpers
+
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            with patch.object(ledger_helpers, "LEGAL_ARCHIVE_ROOT", tmpdir):
+                dir1 = ledger_helpers.archive_legal_docs(
+                    [{"name": "a.pdf", "bytes": b"%PDF"}],
+                    [{"doc_type": "起诉状"}],
+                    "案件A",
+                )
+                dir2 = ledger_helpers.archive_legal_docs(
+                    [{"name": "b.pdf", "bytes": b"%PDF"}],
+                    [{"doc_type": "起诉状"}],
+                    "案件B",
+                )
+
+            self.assertNotEqual(dir1, dir2)
+
+    def test_empty_case_name_falls_back_to_unknown(self):
+        """案件名称为空时，归档目录应为'未知案件'，不应使用文件名。"""
+        import ledger_helpers
+
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            with patch.object(ledger_helpers, "LEGAL_ARCHIVE_ROOT", tmpdir):
+                dir_path = ledger_helpers.archive_legal_docs(
+                    [{"name": "起诉状.pdf", "bytes": b"%PDF"}],
+                    [{"doc_type": "起诉状"}],
+                    "",
+                )
+
+            self.assertIn("未知案件", dir_path)
+            self.assertNotIn("起诉状.pdf", dir_path)
+
+
 class SignInParseTests(unittest.TestCase):
     """parse_sign_in_result：AI 返回文本解析"""
 

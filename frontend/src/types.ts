@@ -81,6 +81,7 @@ export interface LedgerPreview {
   is_new: boolean
   action_text: string
   archive_dir: string
+  existing_archive_name?: string
   pending_archive_id?: string
   existing_count: number
 }

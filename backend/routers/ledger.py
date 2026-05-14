@@ -195,18 +195,18 @@ async def extract_ledger(
         yield send(f"→ {'匹配到第 ' + str(match_idx + 1) + ' 条记录' if match_idx is not None else '未匹配，将新增'}")
 
         # Step 4: 准备预览数据（合并但不保存）
+        existing_archive_name = ""  # 已有案件的归档目录名，用于保证同案件文书归入同一文件夹
         if match_idx is not None:
+            existing_archive_name = existing_cases[match_idx].get("案件名称", "")
             preview_case = merge_case_data(existing_cases[match_idx], new_case)
             case_name = preview_case.get("案件名称", "")
             stage_summary = "、".join(s["审级"] for s in preview_case.get("stages", []))
             action_text = f"已有案件「{case_name}」，将更新（审级：{stage_summary or '无'}）"
             is_new = False
         else:
-            if not new_case.get("案件名称"):
-                new_case["案件名称"] = files_data[0]["name"]
             preview_case = new_case
             case_name = preview_case.get("案件名称", "")
-            action_text = f"新案件「{case_name}」，将新增至台账"
+            action_text = f"新案件「{case_name or '（待补充）'}」，将新增至台账"
             is_new = True
 
         # Step 5: 暂存待归档文书，确认写入后再进入正式归档目录。
@@ -226,6 +226,7 @@ async def extract_ledger(
             "is_new": is_new,
             "action_text": action_text,
             "archive_dir": "",
+            "existing_archive_name": existing_archive_name,
             "pending_archive_id": pending_archive_id,
             "existing_count": len(existing_cases),
         }
@@ -240,6 +241,7 @@ class LedgerWriteRequest(BaseModel):
     case_data: dict
     match_idx: int | None
     archive_dir: str
+    existing_archive_name: str = ""
     pending_archive_id: str = ""
     session_id: str = ""
 
@@ -257,7 +259,9 @@ def write_ledger_confirm(
     output_dir = Path(LEDGER_OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
-        archive_dir = _commit_pending_archive(user.id, req.pending_archive_id, req.case_data.get("案件名称", "")) if req.pending_archive_id else req.archive_dir
+        # 匹配到已有案件时，使用已有案件名称作为归档目录名，保证同案件文书归入同一文件夹
+        archive_case_name = req.existing_archive_name or req.case_data.get("案件名称", "")
+        archive_dir = _commit_pending_archive(user.id, req.pending_archive_id, archive_case_name) if req.pending_archive_id else req.archive_dir
     except Exception as e:
         write_log(db, user, "ledger_archive_failed", f"案件文书归档失败：{e}", request)
         raise HTTPException(status_code=500, detail=f"文书归档失败：{e}")
