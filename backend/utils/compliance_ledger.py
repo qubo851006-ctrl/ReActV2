@@ -26,6 +26,7 @@ DEFAULT_RESPONSIBLE_PERSONS = {
     "党群办公室/董事会办公室/行政办公室": "刘芳",
     "安全质量部": "霍晓冬",
     "纪委办公室/巡察工作领导小组办公室": "边宁",
+    "西南分公司（四川中航物业）": "张虎",
 }
 
 VALID_IMPLEMENTATIONS = {"已按要求补充完善", "未见落实", "不涉及", "/"}
@@ -177,6 +178,110 @@ def _is_countersign_section(entry: dict[str, Any]) -> bool:
         or ""
     )
     return "会签" in section
+
+
+_SIGN_TIME_RE = re.compile(r"20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?")
+
+
+def _normalize_match_text(value: Any) -> str:
+    return re.sub(r"[\s　]+", "", str(value or ""))
+
+
+def _extract_countersign_section(text: str) -> str:
+    match = re.search(r"会签", text or "")
+    if not match:
+        return ""
+    section = text[match.end():]
+    stops = [
+        "批准部门意见",
+        "拟稿单位意见",
+        "办公室主任审核",
+        "拟稿单位负责人",
+        "承办单位意见",
+    ]
+    stop_positions = [section.find(marker) for marker in stops if section.find(marker) >= 0]
+    if stop_positions:
+        section = section[:min(stop_positions)]
+    return section
+
+
+def _opinion_before_signer(section: str, signer_start: int) -> str:
+    prefix = section[:signer_start]
+    last_time = None
+    for match in _SIGN_TIME_RE.finditer(prefix):
+        last_time = match
+    if last_time:
+        prefix = prefix[last_time.end():]
+    lines = [line.strip() for line in prefix.splitlines() if line.strip()]
+    if not lines:
+        return "已阅。"
+    opinion_lines: list[str] = []
+    for line in reversed(lines):
+        if _SIGN_TIME_RE.search(line):
+            break
+        opinion_lines.insert(0, line)
+        if len(opinion_lines) >= 3:
+            break
+    opinion = "\n".join(opinion_lines).strip()
+    return opinion or "已阅。"
+
+
+def _supplement_countersign_from_text(raw: dict[str, Any], text: str, persons: dict[str, str]) -> dict[str, Any]:
+    section = _extract_countersign_section(text)
+    if not section:
+        return raw
+
+    next_raw = dict(raw)
+    countersign = [
+        dict(entry)
+        for entry in (next_raw.get("countersign") or [])
+        if isinstance(entry, dict)
+    ]
+    existing_departments = {
+        re.sub(r"\s+", "", configured)
+        for entry in countersign
+        if (
+            configured := _configured_department_for_person(
+                _clean_text(entry.get("department"), ""),
+                _clean_text(entry.get("person") or entry.get("signer"), ""),
+                persons,
+            )
+        )
+    }
+    normalized_section = _normalize_match_text(section)
+
+    for department, person in persons.items():
+        configured_dept = _configured_department_for_person(department, person, persons)
+        if not configured_dept:
+            continue
+        dept_key = re.sub(r"\s+", "", configured_dept)
+        if dept_key in existing_departments:
+            continue
+
+        person_key = _normalize_match_text(person)
+        dept_match_key = _normalize_match_text(configured_dept)
+        person_pos = normalized_section.find(person_key)
+        if person_pos < 0 or dept_match_key not in normalized_section[max(0, person_pos - 120):person_pos + 120]:
+            continue
+
+        signer_match = re.search(re.escape(str(person)), section)
+        if not signer_match:
+            continue
+        window = section[max(0, signer_match.start() - 120):signer_match.end() + 120]
+        time_match = _SIGN_TIME_RE.search(window)
+        countersign.append({
+            "department": configured_dept,
+            "person": str(person),
+            "time": time_match.group(0) if time_match else "",
+            "opinion_text": _opinion_before_signer(section, signer_match.start()),
+            "detail": "",
+            "implementation": "/",
+        })
+        existing_departments.add(dept_key)
+
+    if countersign:
+        next_raw["countersign"] = countersign
+    return next_raw
 
 
 def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dict[str, Any]:
@@ -397,6 +502,7 @@ def extract_compliance_item(text: str, responsible_persons: dict[str, str] | Non
     except Exception as exc:
         reviewed = _append_warning(extracted, f"DeepSeek 校验失败，已保留 Qwen 提取结果：{exc}")
 
+    reviewed = _supplement_countersign_from_text(reviewed, text, persons)
     return normalize_extracted_item(reviewed, persons)
 
 

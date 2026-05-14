@@ -469,6 +469,59 @@ class ComplianceLedgerModelTests(unittest.TestCase):
         self.assertEqual(item["background_materials"], ["附件二"])
         self.assertIn("DeepSeek 已校验", item["warnings"])
 
+    def test_extract_compliance_item_supplements_countersign_heads_from_source_text(self):
+        qwen_json = """
+        {
+          "title": "关于测试事项的请示",
+          "procedure": "总办会审议",
+          "attachments": [],
+          "undertaking": {"department": "规划与资产部/深化改革领导小组办公室", "person": "富小鹏", "time": "2026-05-08 18:35:46", "opinion_text": "拟同意。", "detail": "", "implementation": "/"},
+          "countersign": [
+            {"department": "财务部", "person": "杨焕", "time": "2026-05-09 15:08:46", "opinion_text": "拟同意。", "detail": "", "implementation": "/"}
+          ],
+          "compliance": {"department": "审计部/法务合规部", "person": "李莹", "time": "2026-05-09 10:51:09", "opinion_text": "已阅。拟同意。", "detail": "", "implementation": "/"},
+          "chief": {"person": "胡鹏斌", "time": "2026-05-11 10:21:13", "opinion_text": "拟同意，建议提交总经理办公会会议审议。", "detail": "", "implementation": "/"},
+          "warnings": []
+        }
+        """
+        deepseek_json = qwen_json
+        source_text = """
+签发意见
+拟同意，建议提交总经理办公会会议审议。
+中航建设直属 胡鹏斌 2026-05-11 10:21:13
+会签
+拟同意。
+财务部 杨焕 2026-05-09 15:08:46
+已阅。
+审计部/法务合规部 李莹 2026-05-09 10:51:09
+已阅。
+西南分公司（四川中航物业） 直属 张虎 2026-05-09 09:53:27
+已阅。
+西南分公司（四川中航物业） 直属 王永君 2026-05-09 09:35:13
+已阅。
+党群办公室/董事会办公室/行政办公室 刘芳 2026-05-11 09:49:20
+批准部门意见
+"""
+        responsible_persons = {
+            "财务部": "杨焕",
+            "审计部/法务合规部": "李莹",
+            "西南分公司（四川中航物业）": "张虎",
+            "党群办公室/董事会办公室/行政办公室": "刘芳",
+            "规划与资产部/深化改革领导小组办公室": "富小鹏",
+        }
+        completions = _FakeCompletions([qwen_json, deepseek_json])
+
+        with patch("llm_client.get_llm_client", return_value=_FakeClient(completions)):
+            item = extract_compliance_item(source_text, responsible_persons)
+
+        review_units = [row["review_unit"] for row in item["review_rows"]]
+
+        self.assertIn("会签单位（财务部）", review_units)
+        self.assertIn("会签单位（西南分公司（四川中航物业））", review_units)
+        self.assertIn("会签单位（党群办公室/董事会办公室/行政办公室）", review_units)
+        self.assertNotIn("会签单位（审计部/法务合规部）", review_units)
+        self.assertNotIn("王永君", json.dumps(item["review_rows"], ensure_ascii=False))
+
 
 if __name__ == "__main__":
     unittest.main()
