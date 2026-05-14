@@ -14,10 +14,6 @@ warnings.filterwarnings("ignore")  # 屏蔽内网 SSL 警告
 load_dotenv(override=True)
 
 
-# 两次识别结果允许的最大偏差，超过则标记为低置信度
-_COUNT_DIFF_THRESHOLD = 2
-
-
 def encode_image(image_path: str) -> str:
     """将图片转为 base64 字符串"""
     with open(image_path, "rb") as f:
@@ -66,12 +62,8 @@ def _call_vision(client: OpenAI, image_url: str, prompt: str, model: str) -> str
 def count_attendees(image_path: str, model: str | None = None) -> dict:
     """
     分析签到表图片，统计参与人数及提取抬头信息。
-    包含自我反思步骤：第一次识别后进行二次验证，
-    若两次结果偏差超过阈值则标记低置信度并取保守值。
 
     返回: {count, topic, location, date, confidence, reflection_note}
-      - confidence: "high" | "low"
-      - reflection_note: 反思检查的说明文字
     """
     selected_model = resolve_vision_model(model)
     client = get_vision_client(selected_model)
@@ -82,7 +74,7 @@ def count_attendees(image_path: str, model: str | None = None) -> dict:
     mime_type = mime_map.get(ext, "image/jpeg")
     image_url = f"data:{mime_type};base64,{image_data}"
 
-    first_prompt = """这是一张培训签到表图片。
+    prompt = """这是一张培训签到表图片。
 
 第一步：提取抬头信息
 - 培训主题、培训地点、培训时间
@@ -108,56 +100,16 @@ def count_attendees(image_path: str, model: str | None = None) -> dict:
 人数：数字
 """
 
-    # 第一次识别
-    first_text = _call_vision(client, image_url, first_prompt, selected_model)
-    first_result = parse_sign_in_result(first_text)
-    first_count = first_result["count"]
-
-    # 反思提示：告知第一次结果，要求重新独立核查
-    reflect_prompt = f"""这是同一张培训签到表图片。
-
-有人刚才数了一遍，认为签到人数是 {first_count} 人。
-请你独立重新核查一遍，不要受这个数字影响。
-
-核查方法：
-- 签到表分左右两栏，逐行检查每个姓名格
-- 有手写内容的格子：写"有"，空白的格子：写"空"
-- 把所有"有"的格子数量加总
-- 忽略表格底部任何手写的合计数字
-
-请按以下格式输出，不要有多余内容：
-明细：（逐行结果）
-人数：数字
-"""
-
-    # 第二次独立核查
-    reflect_text = _call_vision(client, image_url, reflect_prompt, selected_model)
-    second_result = parse_sign_in_result(reflect_text)
-    second_count = second_result["count"]
-
-    # 综合两次结果
-    diff = abs(first_count - second_count)
-    if diff <= _COUNT_DIFF_THRESHOLD:
-        # 两次结果接近，取较小值（保守估计，避免虚报）
-        final_count = min(first_count, second_count)
-        confidence = "high"
-        reflection_note = f"两次识别结果一致（{first_count} / {second_count}），人数可信。"
-    else:
-        # 偏差较大，取较小值并标记低置信度
-        final_count = min(first_count, second_count)
-        confidence = "low"
-        reflection_note = (
-            f"⚠️ 两次识别结果存在偏差（第一次 {first_count} 人 / 核查 {second_count} 人），"
-            f"已取较小值 {final_count} 人，建议人工复核签到表。"
-        )
+    result_text = _call_vision(client, image_url, prompt, selected_model)
+    result = parse_sign_in_result(result_text)
 
     return {
-        "topic": first_result["topic"],
-        "location": first_result["location"],
-        "date": first_result["date"],
-        "count": final_count,
-        "confidence": confidence,
-        "reflection_note": reflection_note,
+        "topic": result["topic"],
+        "location": result["location"],
+        "date": result["date"],
+        "count": result["count"],
+        "confidence": "high",
+        "reflection_note": "",
     }
 
 
