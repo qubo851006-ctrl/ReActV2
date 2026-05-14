@@ -226,6 +226,24 @@ def _opinion_before_signer(section: str, signer_start: int) -> str:
     return opinion or "已阅。"
 
 
+def _find_person_match(section: str, person: str) -> re.Match[str] | None:
+    compact_person = _normalize_match_text(person)
+    if not compact_person:
+        return None
+    pattern = r"[\s　]*".join(re.escape(char) for char in compact_person)
+    return re.search(pattern, section)
+
+
+def _time_near_signer(section: str, signer_match: re.Match[str]) -> str:
+    after = section[signer_match.end():signer_match.end() + 100]
+    after_match = _SIGN_TIME_RE.search(after)
+    if after_match:
+        return after_match.group(0)
+    before = section[max(0, signer_match.start() - 100):signer_match.start()]
+    before_matches = list(_SIGN_TIME_RE.finditer(before))
+    return before_matches[-1].group(0) if before_matches else ""
+
+
 def _supplement_countersign_from_text(raw: dict[str, Any], text: str, persons: dict[str, str]) -> dict[str, Any]:
     section = _extract_countersign_section(text)
     if not section:
@@ -264,15 +282,13 @@ def _supplement_countersign_from_text(raw: dict[str, Any], text: str, persons: d
         if person_pos < 0 or dept_match_key not in normalized_section[max(0, person_pos - 120):person_pos + 120]:
             continue
 
-        signer_match = re.search(re.escape(str(person)), section)
+        signer_match = _find_person_match(section, str(person))
         if not signer_match:
             continue
-        window = section[max(0, signer_match.start() - 120):signer_match.end() + 120]
-        time_match = _SIGN_TIME_RE.search(window)
         countersign.append({
             "department": configured_dept,
             "person": str(person),
-            "time": time_match.group(0) if time_match else "",
+            "time": _time_near_signer(section, signer_match),
             "opinion_text": _opinion_before_signer(section, signer_match.start()),
             "detail": "",
             "implementation": "/",
