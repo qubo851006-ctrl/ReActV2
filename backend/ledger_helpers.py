@@ -162,7 +162,7 @@ def _ocr_page_with_airchina(page_index: int, img_b64: str) -> tuple[int, str]:
     import httpx
     import warnings
 
-    url = AIRCHINA_BASE_URL.rstrip("/") + f"/oneapi/proxy/{_AIRCHINA_OCR_CHANNEL}"
+    url = AIRCHINA_BASE_URL.rstrip("/") + f"/oneapi/proxy/{_AIRCHINA_OCR_CHANNEL}/"
     headers = {
         **build_ai_http_headers(),
         "Authorization": f"Bearer {AIRCHINA_API_KEY}",
