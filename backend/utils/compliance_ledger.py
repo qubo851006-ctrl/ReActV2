@@ -325,6 +325,34 @@ def _deduplicate_chief_opinion(chief: dict[str, Any], entries: list) -> dict[str
     return chief
 
 
+def _fix_chief_opinion_from_text(raw: dict[str, Any], text: str) -> dict[str, Any]:
+    chief = raw.get("chief")
+    if not chief or not isinstance(chief, dict) or not text:
+        return raw
+    opinion = _clean_text(chief.get("opinion_text"), "")
+    if not opinion or len(opinion) < 10:
+        return raw
+    signer_match = _find_person_match(text, CHIEF_COMPLIANCE_PERSON)
+    if not signer_match:
+        return raw
+    line_start = text.rfind("\n", 0, signer_match.start())
+    boundary = (line_start + 1) if line_start >= 0 else 0
+    extracted_opinion = _opinion_before_signer(text, boundary)
+    if not extracted_opinion or extracted_opinion == "已阅。":
+        return raw
+    normalized_extracted = re.sub(r"\s+", "", extracted_opinion)
+    normalized_current = re.sub(r"\s+", "", opinion)
+    if normalized_extracted == normalized_current:
+        return raw
+    if len(normalized_extracted) < len(normalized_current) and normalized_extracted in normalized_current:
+        next_raw = dict(raw)
+        next_chief = dict(chief)
+        next_chief["opinion_text"] = extracted_opinion
+        next_raw["chief"] = next_chief
+        return next_raw
+    return raw
+
+
 def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dict[str, Any]:
     entries = raw.get("approval_entries") or raw.get("approvals") or []
     if not isinstance(entries, list):
@@ -549,6 +577,7 @@ def extract_compliance_item(text: str, responsible_persons: dict[str, str] | Non
         reviewed = _append_warning(extracted, f"DeepSeek 校验失败，已保留 Qwen 提取结果：{exc}")
 
     reviewed = _supplement_countersign_from_text(reviewed, text, persons)
+    reviewed = _fix_chief_opinion_from_text(reviewed, text)
     return normalize_extracted_item(reviewed, persons)
 
 

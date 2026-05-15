@@ -14,6 +14,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 from utils.compliance_ledger import (  # noqa: E402
     _deduplicate_chief_opinion,
     _detail_for_opinion,
+    _fix_chief_opinion_from_text,
     _is_compliance_department,
     append_record,
     build_review_rows,
@@ -633,6 +634,46 @@ class ComplianceSmokeTestPDFScenario(unittest.TestCase):
         chief_row = [r for r in rows if r["review_unit"] == "首席合规官"][0]
         self.assertEqual(chief_row["review_opinion"], "同意")
         self.assertEqual(chief_row["detail"], "/")
+
+
+class ComplianceFixChiefFromTextTests(unittest.TestCase):
+    SIGN_SECTION = (
+        "同意提交总办会审议。请履行会前传签程序。\n"
+        "                                中航建设直属 徐勤 2026-05-11 10:40:42\n"
+        "拟同意，建议提交总经理办公会议审议。\n"
+        "                                中航建设直属 胡鹏斌 2026-05-11 10:21:13\n"
+    )
+
+    def test_corrects_merged_chief_opinion(self):
+        raw = {
+            "chief": {
+                "person": "胡鹏斌",
+                "time": "2026-05-11 10:21:13",
+                "opinion_text": "同意提交总办会审议。请履行会前传签程序。拟同意，建议提交总经理办公会议审议。",
+            }
+        }
+        result = _fix_chief_opinion_from_text(raw, self.SIGN_SECTION)
+        self.assertEqual(result["chief"]["opinion_text"], "拟同意，建议提交总经理办公会议审议。")
+
+    def test_no_change_when_opinion_already_correct(self):
+        raw = {
+            "chief": {
+                "person": "胡鹏斌",
+                "opinion_text": "拟同意，建议提交总经理办公会议审议。",
+            }
+        }
+        result = _fix_chief_opinion_from_text(raw, self.SIGN_SECTION)
+        self.assertEqual(result["chief"]["opinion_text"], "拟同意，建议提交总经理办公会议审议。")
+
+    def test_no_change_when_chief_not_found_in_text(self):
+        raw = {
+            "chief": {
+                "person": "胡鹏斌",
+                "opinion_text": "同意提交总办会审议。拟同意，建议提交。",
+            }
+        }
+        result = _fix_chief_opinion_from_text(raw, "无关文本内容")
+        self.assertEqual(result["chief"]["opinion_text"], "同意提交总办会审议。拟同意，建议提交。")
 
 
 class ComplianceDeduplicateChiefOpinionTests(unittest.TestCase):
