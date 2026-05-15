@@ -778,6 +778,40 @@ class ComplianceFixChiefFromTextTests(unittest.TestCase):
         self.assertEqual(result["chief"]["opinion_text"], "拟同意，建议提交总经理办公会议审议。")
         self.assertEqual(result["chief"]["detail"], "")
 
+    def test_corrects_merged_chief_opinion_when_ocr_table_cell_is_already_merged(self):
+        raw = {
+            "chief": {
+                "person": "胡鹏斌",
+                "time": "2026-05-11 10:40:42",
+                "opinion_text": "同意提交总办会审议。请履行会前传签程序。拟同意，建议提交总经理办公会议审议。",
+                "detail": "",
+            }
+        }
+        merged_table_text = (
+            "|签发|同意提交总办会审议。请履行会前传签程序。拟同意，建议提交总经理办公会议审议。|"
+            "中航建设直属 徐勤 2026-05-11 10:40:42 中航建设直属 胡鹏斌 2026-05-11 10:40:42|"
+        )
+        result = _fix_chief_opinion_from_text(raw, merged_table_text)
+        self.assertEqual(result["chief"]["opinion_text"], "拟同意，建议提交总经理办公会议审议。")
+        self.assertEqual(result["chief"]["detail"], "")
+
+    def test_corrects_merged_chief_opinion_when_chief_disagrees(self):
+        raw = {
+            "chief": {
+                "person": "胡鹏斌",
+                "time": "2026-05-11 10:40:42",
+                "opinion_text": "同意提交总办会审议。请履行会前传签程序。不同意，建议暂缓提交。",
+                "detail": "",
+            }
+        }
+        merged_table_text = (
+            "|签发|同意提交总办会审议。请履行会前传签程序。不同意，建议暂缓提交。|"
+            "中航建设直属 徐勤 2026-05-11 10:40:42 中航建设直属 胡鹏斌 2026-05-11 10:40:42|"
+        )
+        result = _fix_chief_opinion_from_text(raw, merged_table_text)
+        self.assertEqual(result["chief"]["opinion_text"], "不同意，建议暂缓提交。")
+        self.assertEqual(result["chief"]["detail"], "")
+
 
 class ComplianceDeduplicateChiefOpinionTests(unittest.TestCase):
     def test_strips_other_signer_opinion_from_chief(self):

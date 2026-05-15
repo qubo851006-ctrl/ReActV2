@@ -254,6 +254,17 @@ def _trim_opinion_segment(value: str) -> str:
     return text
 
 
+def _last_independent_opinion(value: str) -> str:
+    text = re.sub(r"\s+", "", value or "")
+    if not text:
+        return ""
+    sentences = re.findall(r"[^。！？；;]+[。！？；;]?", text)
+    sentences = [s for s in sentences if s]
+    if len(sentences) <= 1:
+        return text
+    return sentences[-1]
+
+
 def _opinion_before_signer_match(text: str, signer_match: re.Match[str]) -> str:
     prefix = text[:signer_match.start()]
     time_matches = list(_SIGN_TIME_RE.finditer(prefix))
@@ -264,6 +275,17 @@ def _opinion_before_signer_match(text: str, signer_match: re.Match[str]) -> str:
         if section_match:
             prefix = prefix[section_match.end():]
     return _trim_opinion_segment(prefix)
+
+
+def _is_ambiguous_chief_source(text: str, signer_match: re.Match[str]) -> bool:
+    line_start = text.rfind("\n", 0, signer_match.start())
+    line_end = text.find("\n", signer_match.end())
+    if line_start < 0:
+        line_start = max(0, signer_match.start() - 300)
+    if line_end < 0:
+        line_end = min(len(text), signer_match.end() + 300)
+    window = text[line_start:line_end]
+    return len(_SIGN_TIME_RE.findall(window)) >= 2
 
 
 def _supplement_countersign_from_text(raw: dict[str, Any], text: str, persons: dict[str, str]) -> dict[str, Any]:
@@ -369,12 +391,25 @@ def _fix_chief_opinion_from_text(raw: dict[str, Any], text: str) -> dict[str, An
     if not signer_match:
         return raw
     extracted_opinion = _opinion_before_signer_match(text, signer_match)
+    time = _time_near_signer(text, signer_match)
+    current_opinion = _clean_text(chief.get("opinion_text"), "")
+    current_tail = _last_independent_opinion(current_opinion)
+    ambiguous_source = _is_ambiguous_chief_source(text, signer_match)
+    if (not extracted_opinion or extracted_opinion == "已阅。") and ambiguous_source and current_tail != current_opinion:
+        extracted_opinion = current_tail
     if not extracted_opinion or extracted_opinion == "已阅。":
         return raw
-    time = _time_near_signer(text, signer_match)
+    if (
+        current_tail
+        and current_tail != current_opinion
+        and (
+            current_tail in extracted_opinion
+            or ambiguous_source
+        )
+    ):
+        extracted_opinion = current_tail
     normalized_extracted = re.sub(r"\s+", "", extracted_opinion)
-    opinion = _clean_text(chief.get("opinion_text"), "")
-    normalized_current = re.sub(r"\s+", "", opinion)
+    normalized_current = re.sub(r"\s+", "", current_opinion)
     detail = _clean_text(chief.get("detail"), "")
     normalized_detail = re.sub(r"\s+", "", detail)
     if normalized_extracted == normalized_current and (not detail or normalized_detail == normalized_extracted):
