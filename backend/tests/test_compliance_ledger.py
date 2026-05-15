@@ -12,6 +12,8 @@ TEST_TMP_ROOT = BACKEND_DIR / "tests" / "tmp"
 sys.path.insert(0, str(BACKEND_DIR))
 
 from utils.compliance_ledger import (  # noqa: E402
+    _detail_for_opinion,
+    _is_compliance_department,
     append_record,
     build_review_rows,
     create_compliance_workbook,
@@ -155,7 +157,7 @@ class ComplianceLedgerRowsTests(unittest.TestCase):
         self.assertNotIn("请履行会前传签程序", json.dumps(chief_rows[0], ensure_ascii=False))
         self.assertNotIn("会签单位（中航建设直属）", [row["review_unit"] for row in rows])
 
-    def test_approval_entries_ignore_unknown_workflow_nodes_as_countersign_units(self):
+    def test_approval_entries_pick_configured_heads_and_ignore_unknown_persons(self):
         item = normalize_extracted_item({
             "title": "关于测试事项的请示",
             "procedure": "总办会审议",
@@ -179,10 +181,10 @@ class ComplianceLedgerRowsTests(unittest.TestCase):
 
         review_units = [row["review_unit"] for row in item["review_rows"]]
 
-        self.assertNotIn("会签单位（人力资源部）", review_units)
+        self.assertIn("会签单位（人力资源部）", review_units)
         self.assertNotIn("会签单位（中航建设直属）", review_units)
 
-    def test_countersign_units_only_come_from_explicit_countersign_field(self):
+    def test_countersign_merges_explicit_field_and_approval_entries(self):
         item = normalize_extracted_item({
             "title": "关于测试事项的请示",
             "procedure": "总办会审议",
@@ -207,7 +209,7 @@ class ComplianceLedgerRowsTests(unittest.TestCase):
         review_units = [row["review_unit"] for row in item["review_rows"]]
 
         self.assertIn("会签单位（财务部）", review_units)
-        self.assertNotIn("会签单位（人力资源部）", review_units)
+        self.assertIn("会签单位（人力资源部）", review_units)
 
     def test_countersign_filters_to_configured_department_heads(self):
         responsible_persons = {
@@ -244,7 +246,7 @@ class ComplianceLedgerRowsTests(unittest.TestCase):
 
         self.assertEqual(review_units, ["会签单位（西南分公司（四川中航物业））", "会签单位（财务部）"])
 
-    def test_approval_entries_can_fill_missing_countersign_for_configured_head_only_when_from_countersign_section(self):
+    def test_approval_entries_fill_countersign_for_all_configured_heads(self):
         responsible_persons = {
             "人力资源部": "陈锐",
             "党群办公室/董事会办公室/行政办公室": "刘芳",
@@ -258,14 +260,12 @@ class ComplianceLedgerRowsTests(unittest.TestCase):
                     "person": "刘芳",
                     "time": "2026-05-11 09:49:20",
                     "opinion_text": "已阅。",
-                    "source_section": "会签",
                 },
                 {
                     "department": "人力资源部",
                     "person": "陈锐",
                     "time": "2026-05-11 09:50:00",
                     "opinion_text": "同意。",
-                    "source_section": "审批流转",
                 },
             ],
         }, responsible_persons)
@@ -273,7 +273,7 @@ class ComplianceLedgerRowsTests(unittest.TestCase):
         review_units = [row["review_unit"] for row in item["review_rows"]]
 
         self.assertIn("会签单位（党群办公室/董事会办公室/行政办公室）", review_units)
-        self.assertNotIn("会签单位（人力资源部）", review_units)
+        self.assertIn("会签单位（人力资源部）", review_units)
 
 
 class ComplianceLedgerWorkbookTests(unittest.TestCase):
@@ -521,6 +521,114 @@ class ComplianceLedgerModelTests(unittest.TestCase):
         self.assertIn("会签单位（党群办公室/董事会办公室/行政办公室）", review_units)
         self.assertNotIn("会签单位（审计部/法务合规部）", review_units)
         self.assertNotIn("王永君", json.dumps(item["review_rows"], ensure_ascii=False))
+
+
+class ComplianceDetailForOpinionTests(unittest.TestCase):
+    def test_short_agree_opinion_returns_slash(self):
+        self.assertEqual(_detail_for_opinion({"opinion_text": "拟同意。"}), "/")
+
+    def test_long_agree_opinion_preserves_content(self):
+        long_opinion = "拟同意。另，会计师事务所在四川民航大厦2025年度财务决算审计报告的强调事项段，提醒财务报表使用者关注相关情况。"
+        result = _detail_for_opinion({"opinion_text": long_opinion})
+        self.assertEqual(result, long_opinion)
+
+    def test_explicit_detail_field_takes_precedence(self):
+        result = _detail_for_opinion({"detail": "明确的意见", "opinion_text": "拟同意。"})
+        self.assertEqual(result, "明确的意见")
+
+    def test_supplement_opinion_returns_full_text(self):
+        text = "建议补充预算测算依据后再行审议"
+        self.assertEqual(_detail_for_opinion({"opinion_text": text}), text)
+
+
+class ComplianceIsComplianceDepartmentTests(unittest.TestCase):
+    def test_configured_person_matches(self):
+        persons = {"审计部/法务合规部": "李莹"}
+        self.assertTrue(_is_compliance_department("审计部/法务合规部", "李莹", persons))
+
+    def test_non_configured_person_in_same_dept_does_not_match(self):
+        persons = {"审计部/法务合规部": "李莹"}
+        self.assertFalse(_is_compliance_department("审计部/法务合规部", "宋媛媛", persons))
+        self.assertFalse(_is_compliance_department("审计部/法务合规部", "申奇奇", persons))
+
+
+class ComplianceSmokeTestPDFScenario(unittest.TestCase):
+    """冒烟测试：模拟四川民航大厦股东会 PDF 的完整提取场景"""
+
+    RESPONSIBLE_PERSONS = {
+        "规划与资产部/深化改革领导小组办公室": "富小鹏",
+        "财务部": "杨焕",
+        "审计部/法务合规部": "李莹",
+        "人力资源部": "陈锐",
+        "党群办公室/董事会办公室/行政办公室": "刘芳",
+        "安全质量部": "霍晓冬",
+        "纪委办公室/巡察工作领导小组办公室": "边宁",
+        "西南分公司（四川中航物业）": "张虎",
+    }
+
+    def test_full_scenario_produces_expected_review_rows(self):
+        item = normalize_extracted_item({
+            "title": "关于对四川民航大厦宾馆有限公司2026年股东会表决意见的请示",
+            "procedure": "总办会审议",
+            "attachments": ["会议通知", "四川民航宾馆股东会文件", "重大经营决策合规审查意见表"],
+            "undertaking": {
+                "department": "规划与资产部/深化改革领导小组办公室",
+                "person": "富小鹏",
+                "time": "2026-05-08 18:35:46",
+                "opinion_text": "拟同意，请会签后呈胡总阅示。",
+            },
+            "approval_entries": [
+                {"department": "审计部/法务合规部", "person": "宋媛媛", "time": "2026-05-09 19:01:35", "opinion_text": "拟同意。"},
+                {"department": "财务部", "person": "杨焕", "time": "2026-05-09 15:08:46",
+                 "opinion_text": "拟同意。另，会计师事务所在四川民航大厦2025年度财务决算审计报告的强调事项段，提醒财务报表使用者关注四川民航大厦2019年4月起停业等情况。"},
+                {"department": "审计部/法务合规部", "person": "申奇奇", "time": "2026-05-09 14:44:59",
+                 "opinion_text": "已阅核。已要求承办单位出具经本单位合规管理员签署的合规审查意见（后附）。综合规审查复核，本事项属于需经公司总经理办公会决策的重大经营事项，未发现存在重大合规风险。"},
+                {"department": "审计部/法务合规部", "person": "李莹", "time": "2026-05-09 10:51:09",
+                 "opinion_text": "请奇奇阅核、媛媛阅，明确是否为经理层决策事项，注意合规审查最新要求。"},
+                {"department": "西南分公司（四川中航物业）直属", "person": "张虎", "time": "2026-05-09 09:53:27", "opinion_text": "已阅。拟同意。"},
+                {"department": "西南分公司（四川中航物业）直属", "person": "王永君", "time": "2026-05-09 09:35:13", "opinion_text": "已阅"},
+                {"department": "党群办公室/董事会办公室/行政办公室", "person": "刘芳", "time": "2026-05-09 09:49:20",
+                 "opinion_text": "已核，按照重大事项权责清单（2026版），该事项属于经理层审议重大经营管理事项，建议经理层通过总办会审议方式行权。呈胡总、徐勤阅示。"},
+                {"department": "中航建设直属", "person": "胡鹏斌", "time": "2026-05-11 10:21:13",
+                 "opinion_text": "拟同意，建议提交总经理办公会议审议。"},
+            ],
+            "countersign": [],
+            "compliance": {"department": "审计部/法务合规部", "person": "李莹", "time": "2026-05-09 10:51:09",
+                           "opinion_text": "请奇奇阅核、媛媛阅，明确是否为经理层决策事项，注意合规审查最新要求。"},
+            "chief": {"person": "胡鹏斌", "time": "2026-05-11 10:21:13",
+                      "opinion_text": "拟同意，建议提交总经理办公会议审议。"},
+            "warnings": [],
+        }, self.RESPONSIBLE_PERSONS)
+
+        rows = item["review_rows"]
+        units = [row["review_unit"] for row in rows]
+
+        self.assertIn("首席合规官", units)
+        self.assertIn("合规管理牵头部门（审计部/法务合规部）", units)
+        self.assertIn("会签单位（财务部）", units)
+        self.assertIn("会签单位（西南分公司（四川中航物业））", units)
+        self.assertIn("会签单位（党群办公室/董事会办公室/行政办公室）", units)
+        self.assertIn("承办单位（规划与资产部/深化改革领导小组办公室）", units)
+
+        self.assertEqual(len(units), 6)
+
+        # 非配置负责人不应出现
+        all_text = json.dumps(rows, ensure_ascii=False)
+        self.assertNotIn("宋媛媛", all_text)
+        self.assertNotIn("申奇奇", all_text)
+        self.assertNotIn("王永君", all_text)
+
+        # 杨焕的长意见应保留在 detail 中
+        finance_row = [r for r in rows if "财务部" in r["review_unit"]][0]
+        self.assertIn("会计师事务所", finance_row["detail"])
+
+        # 刘芳的长意见应保留在 detail 中
+        party_row = [r for r in rows if "党群" in r["review_unit"]][0]
+        self.assertIn("重大事项权责清单", party_row["detail"])
+
+        # 首席合规官短意见 detail 应为 /
+        chief_row = [r for r in rows if r["review_unit"] == "首席合规官"][0]
+        self.assertEqual(chief_row["review_opinion"], "同意")
 
 
 if __name__ == "__main__":

@@ -112,6 +112,8 @@ def _detail_for_opinion(item: dict[str, Any]) -> str:
         return detail
     opinion_text = _clean_text(item.get("opinion_text"), "")
     if normalize_review_opinion(opinion_text) == "同意":
+        if len(opinion_text) > 20:
+            return opinion_text
         return "/"
     return opinion_text or "/"
 
@@ -148,9 +150,6 @@ def _approval_entry_to_item(entry: dict[str, Any]) -> dict[str, str]:
 
 
 def _is_compliance_department(department: str, person: str, persons: dict[str, str]) -> bool:
-    dept = re.sub(r"\s+", "", department)
-    if "审计部" in dept or "法务合规部" in dept:
-        return True
     configured = _normalize_person_name(persons.get("审计部/法务合规部"))
     return bool(configured and _normalize_person_name(person) == configured)
 
@@ -279,7 +278,7 @@ def _supplement_countersign_from_text(raw: dict[str, Any], text: str, persons: d
         person_key = _normalize_match_text(person)
         dept_match_key = _normalize_match_text(configured_dept)
         person_pos = normalized_section.find(person_key)
-        if person_pos < 0 or dept_match_key not in normalized_section[max(0, person_pos - 120):person_pos + 120]:
+        if person_pos < 0 or dept_match_key not in normalized_section[max(0, person_pos - 300):person_pos + 300]:
             continue
 
         signer_match = _find_person_match(section, str(person))
@@ -321,7 +320,7 @@ def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dic
             next_raw["chief"] = item
         elif _is_compliance_department(department, person, persons):
             next_raw["compliance"] = item
-        elif _is_countersign_section(entry):
+        else:
             configured_dept = _configured_department_for_person(department, person, persons)
             if configured_dept:
                 dept_key = re.sub(r"\s+", "", configured_dept)
