@@ -342,9 +342,6 @@ def _fix_chief_opinion_from_text(raw: dict[str, Any], text: str) -> dict[str, An
     chief = raw.get("chief")
     if not chief or not isinstance(chief, dict) or not text:
         return raw
-    opinion = _clean_text(chief.get("opinion_text"), "")
-    if not opinion or len(opinion) < 10:
-        return raw
     signer_match = _find_signer_with_timestamp(text, CHIEF_COMPLIANCE_PERSON)
     if not signer_match:
         return raw
@@ -353,17 +350,23 @@ def _fix_chief_opinion_from_text(raw: dict[str, Any], text: str) -> dict[str, An
     extracted_opinion = _opinion_before_signer(text, boundary)
     if not extracted_opinion or extracted_opinion == "已阅。":
         return raw
+    time = _time_near_signer(text, signer_match)
     normalized_extracted = re.sub(r"\s+", "", extracted_opinion)
+    opinion = _clean_text(chief.get("opinion_text"), "")
     normalized_current = re.sub(r"\s+", "", opinion)
-    if normalized_extracted == normalized_current:
+    detail = _clean_text(chief.get("detail"), "")
+    normalized_detail = re.sub(r"\s+", "", detail)
+    if normalized_extracted == normalized_current and (not detail or normalized_detail == normalized_extracted):
         return raw
-    if len(normalized_extracted) < len(normalized_current) and normalized_extracted in normalized_current:
-        next_raw = dict(raw)
-        next_chief = dict(chief)
-        next_chief["opinion_text"] = extracted_opinion
-        next_raw["chief"] = next_chief
-        return next_raw
-    return raw
+    next_raw = dict(raw)
+    next_chief = dict(chief)
+    next_chief["person"] = CHIEF_COMPLIANCE_PERSON
+    next_chief["opinion_text"] = extracted_opinion
+    next_chief["detail"] = ""
+    if time:
+        next_chief["time"] = time
+    next_raw["chief"] = next_chief
+    return next_raw
 
 
 def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dict[str, Any]:

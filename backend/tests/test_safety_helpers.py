@@ -405,7 +405,7 @@ class LedgerOcrResponseTests(unittest.TestCase):
         self.assertEqual(text, "ok")
         self.assertEqual(captured["headers"]["Host"], "aiplus.airchina.com.cn:18080")
         self.assertEqual(captured["headers"]["Authorization"], "Bearer key")
-        self.assertEqual(captured["url"], "http://ai.local/v1/oneapi/proxy/25")
+        self.assertEqual(captured["url"], "http://ai.local/v1/oneapi/proxy/25/")
 
 
 class OllamaModelRoutingTests(unittest.TestCase):

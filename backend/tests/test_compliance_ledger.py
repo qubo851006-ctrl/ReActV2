@@ -524,6 +524,41 @@ class ComplianceLedgerModelTests(unittest.TestCase):
         self.assertNotIn("会签单位（审计部/法务合规部）", review_units)
         self.assertNotIn("王永君", json.dumps(item["review_rows"], ensure_ascii=False))
 
+    def test_extract_compliance_item_resets_chief_detail_from_source_text(self):
+        merged_chief_text = "同意提交总办会审议。请履行会前传签程序。拟同意，建议提交总经理办公会会议审议。"
+        qwen_json = f"""
+        {{
+          "title": "关于测试事项的请示",
+          "procedure": "总办会审议",
+          "attachments": [],
+          "undertaking": {{"department": "规划与资产部/深化改革领导小组办公室", "person": "富小鹏", "time": "2026-05-08 18:35:46", "opinion_text": "拟同意。", "detail": "", "implementation": "/"}},
+          "countersign": [],
+          "compliance": {{"department": "审计部/法务合规部", "person": "李莹", "time": "2026-05-09 10:51:09", "opinion_text": "已阅。拟同意。", "detail": "", "implementation": "/"}},
+          "chief": {{"person": "胡鹏斌", "time": "2026-05-11 10:21:13", "opinion_text": "{merged_chief_text}", "detail": "{merged_chief_text}", "implementation": "/"}},
+          "warnings": []
+        }}
+        """
+        source_text = """
+签发意见
+同意提交总办会审议。请履行会前传签程序。
+中航建设直属 徐勤 2026-05-11 10:40:42
+拟同意，建议提交总经理办公会会议审议。
+中航建设直属 胡鹏斌 2026-05-11 10:21:13
+会签
+"""
+        completions = _FakeCompletions([qwen_json, qwen_json])
+
+        with patch("llm_client.get_llm_client", return_value=_FakeClient(completions)):
+            item = extract_compliance_item(source_text, {"审计部/法务合规部": "李莹"})
+
+        chief_rows = [row for row in item["review_rows"] if row["review_unit"] == "首席合规官"]
+
+        self.assertEqual(len(chief_rows), 1)
+        self.assertEqual(chief_rows[0]["review_time"], "2026-05-11 10:21:13")
+        self.assertEqual(chief_rows[0]["review_opinion"], "同意")
+        self.assertEqual(chief_rows[0]["detail"], "/")
+        self.assertNotIn("请履行会前传签程序", json.dumps(chief_rows[0], ensure_ascii=False))
+
 
 class ComplianceDetailForOpinionTests(unittest.TestCase):
     def test_short_agree_opinion_returns_slash(self):
