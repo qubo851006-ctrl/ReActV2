@@ -562,6 +562,33 @@ class ComplianceLedgerModelTests(unittest.TestCase):
         self.assertEqual(chief_rows[0]["detail"], "/")
         self.assertNotIn("请履行会前传签程序", json.dumps(chief_rows[0], ensure_ascii=False))
 
+    def test_extract_compliance_item_writes_debug_snapshot(self):
+        qwen_json = """
+        {
+          "title": "关于测试事项的请示",
+          "procedure": "总办会审议",
+          "attachments": [],
+          "undertaking": {"department": "规划与资产部/深化改革领导小组办公室", "person": "富小鹏", "time": "2026-05-08 18:35:46", "opinion_text": "拟同意。", "detail": "", "implementation": "/"},
+          "countersign": [],
+          "compliance": {"department": "审计部/法务合规部", "person": "李莹", "time": "2026-05-09 10:51:09", "opinion_text": "已阅。拟同意。", "detail": "", "implementation": "/"},
+          "chief": {"person": "胡鹏斌", "time": "2026-05-11 10:21:13", "opinion_text": "拟同意，建议提交总经理办公会议审议。", "detail": "", "implementation": "/"},
+          "warnings": []
+        }
+        """
+        completions = _FakeCompletions([qwen_json, qwen_json])
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as tmpdir:
+            debug_path = Path(tmpdir) / "debug-last.json"
+            with patch("llm_client.get_llm_client", return_value=_FakeClient(completions)), \
+                 patch("utils.compliance_ledger.COMPLIANCE_DEBUG_PATH", debug_path):
+                extract_compliance_item("拟同意，建议提交总经理办公会议审议。 中航建设直属 胡鹏斌 2026-05-11 10:21:13", {"审计部/法务合规部": "李莹"})
+
+            debug_data = json.loads(debug_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(debug_data["debug_version"], "compliance-chief-diagnosis-v1")
+        self.assertIn("chief_after_fix", debug_data)
+        self.assertTrue(debug_data["final_review_rows"])
+
 
 class ComplianceDetailForOpinionTests(unittest.TestCase):
     def test_short_agree_opinion_returns_slash(self):

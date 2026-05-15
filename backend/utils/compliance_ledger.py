@@ -7,6 +7,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from config import (
+    COMPLIANCE_LEDGER_DIR,
     COMPLIANCE_LEDGER_EXCEL_PATH,
     COMPLIANCE_LEDGER_JSON_PATH,
     COMPLIANCE_RESPONSIBLE_PERSONS_PATH,
@@ -17,6 +18,7 @@ from file_store import atomic_write_text, file_lock
 COMPLIANCE_EXTRACT_MODEL = "qwen2.5-72b"
 COMPLIANCE_REVIEW_MODEL = "DeepSeek-V3"
 CHIEF_COMPLIANCE_PERSON = "胡鹏斌"
+COMPLIANCE_DEBUG_PATH = Path(COMPLIANCE_LEDGER_DIR) / "debug-last.json"
 
 DEFAULT_RESPONSIBLE_PERSONS = {
     "规划与资产部/深化改革领导小组办公室": "富小鹏",
@@ -388,6 +390,27 @@ def _fix_chief_opinion_from_text(raw: dict[str, Any], text: str) -> dict[str, An
     return next_raw
 
 
+def _chief_text_window(text: str) -> str:
+    signer_match = _find_signer_with_timestamp(text, CHIEF_COMPLIANCE_PERSON)
+    if not signer_match:
+        compact_name = _normalize_match_text(CHIEF_COMPLIANCE_PERSON)
+        pos = _normalize_match_text(text).find(compact_name)
+        return text[:1200] if pos < 0 else text[max(0, pos - 500):pos + 700]
+    return text[max(0, signer_match.start() - 700):signer_match.end() + 500]
+
+
+def _write_compliance_debug(payload: dict[str, Any]) -> None:
+    try:
+        COMPLIANCE_DEBUG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(
+            COMPLIANCE_DEBUG_PATH,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dict[str, Any]:
     entries = raw.get("approval_entries") or raw.get("approvals") or []
     if not isinstance(entries, list):
@@ -611,10 +634,24 @@ def extract_compliance_item(text: str, responsible_persons: dict[str, str] | Non
     except Exception as exc:
         reviewed = _append_warning(extracted, f"DeepSeek 校验失败，已保留 Qwen 提取结果：{exc}")
 
-    reviewed = _supplement_countersign_from_text(reviewed, text, persons)
-    reviewed = _fix_chief_opinion_from_text(reviewed, text)
-    reviewed.pop("review_rows", None)
-    return normalize_extracted_item(reviewed, persons)
+    reviewed_before_fix = reviewed
+    reviewed_after_countersign = _supplement_countersign_from_text(reviewed_before_fix, text, persons)
+    reviewed_after_chief = _fix_chief_opinion_from_text(reviewed_after_countersign, text)
+    reviewed_for_rows = dict(reviewed_after_chief)
+    reviewed_for_rows.pop("review_rows", None)
+    final_item = normalize_extracted_item(reviewed_for_rows, persons)
+    _write_compliance_debug({
+        "debug_version": "compliance-chief-diagnosis-v1",
+        "text_length": len(text or ""),
+        "chief_text_window": _chief_text_window(text or ""),
+        "qwen_extracted_chief": extracted.get("chief") if isinstance(extracted, dict) else None,
+        "qwen_extracted_review_rows": extracted.get("review_rows") if isinstance(extracted, dict) else None,
+        "reviewed_chief_before_fix": reviewed_before_fix.get("chief") if isinstance(reviewed_before_fix, dict) else None,
+        "reviewed_review_rows_before_fix": reviewed_before_fix.get("review_rows") if isinstance(reviewed_before_fix, dict) else None,
+        "chief_after_fix": reviewed_after_chief.get("chief") if isinstance(reviewed_after_chief, dict) else None,
+        "final_review_rows": final_item.get("review_rows"),
+    })
+    return final_item
 
 
 def load_records(path: str | Path = COMPLIANCE_LEDGER_JSON_PATH) -> list[dict[str, Any]]:
