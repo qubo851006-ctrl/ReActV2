@@ -675,6 +675,26 @@ class ComplianceFixChiefFromTextTests(unittest.TestCase):
         result = _fix_chief_opinion_from_text(raw, "无关文本内容")
         self.assertEqual(result["chief"]["opinion_text"], "同意提交总办会审议。拟同意，建议提交。")
 
+    def test_ignores_name_in_body_text_without_timestamp(self):
+        """正文中提到胡鹏斌但没有时间戳的不应匹配，应找签发区带时间戳的那个"""
+        text_with_body_mention = (
+            "建议经理层通过总办会审议方式行权。呈胡鹏斌总、徐勤阅示。\n"
+            "                党群办公室 刘芳 2026-05-11 09:49:20\n"
+            "同意提交总办会审议。请履行会前传签程序。\n"
+            "                中航建设直属 徐勤 2026-05-11 10:40:42\n"
+            "拟同意，建议提交总经理办公会议审议。\n"
+            "                中航建设直属 胡鹏斌 2026-05-11 10:21:13\n"
+        )
+        raw = {
+            "chief": {
+                "person": "胡鹏斌",
+                "time": "2026-05-11 10:21:13",
+                "opinion_text": "同意提交总办会审议。请履行会前传签程序。拟同意，建议提交总经理办公会议审议。",
+            }
+        }
+        result = _fix_chief_opinion_from_text(raw, text_with_body_mention)
+        self.assertEqual(result["chief"]["opinion_text"], "拟同意，建议提交总经理办公会议审议。")
+
 
 class ComplianceDeduplicateChiefOpinionTests(unittest.TestCase):
     def test_strips_other_signer_opinion_from_chief(self):

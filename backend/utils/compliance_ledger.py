@@ -325,6 +325,19 @@ def _deduplicate_chief_opinion(chief: dict[str, Any], entries: list) -> dict[str
     return chief
 
 
+def _find_signer_with_timestamp(text: str, person: str) -> re.Match[str] | None:
+    compact = _normalize_match_text(person)
+    if not compact:
+        return None
+    pattern = r"[\s　]*".join(re.escape(c) for c in compact)
+    best = None
+    for m in re.finditer(pattern, text):
+        after = text[m.end():m.end() + 100]
+        if _SIGN_TIME_RE.search(after):
+            best = m
+    return best
+
+
 def _fix_chief_opinion_from_text(raw: dict[str, Any], text: str) -> dict[str, Any]:
     chief = raw.get("chief")
     if not chief or not isinstance(chief, dict) or not text:
@@ -332,7 +345,7 @@ def _fix_chief_opinion_from_text(raw: dict[str, Any], text: str) -> dict[str, An
     opinion = _clean_text(chief.get("opinion_text"), "")
     if not opinion or len(opinion) < 10:
         return raw
-    signer_match = _find_person_match(text, CHIEF_COMPLIANCE_PERSON)
+    signer_match = _find_signer_with_timestamp(text, CHIEF_COMPLIANCE_PERSON)
     if not signer_match:
         return raw
     line_start = text.rfind("\n", 0, signer_match.start())
