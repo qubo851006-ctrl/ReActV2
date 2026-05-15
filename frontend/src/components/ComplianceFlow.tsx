@@ -10,6 +10,7 @@ import {
   type ComplianceItem,
   type ComplianceReviewRow,
 } from '../api'
+import { useNotifier } from './NotificationProvider'
 
 interface Props {
   onComplete: (reply: string) => void
@@ -47,6 +48,7 @@ export default function ComplianceFlow({
   const [writing, setWriting] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const { notifySuccess, notifyError } = useNotifier()
 
   async function handleExtract() {
     if (!file) return
@@ -61,9 +63,12 @@ export default function ComplianceFlow({
         review_rows: result.review_rows?.length ? result.review_rows : [{ ...EMPTY_ROW }],
       })
       setStep('review')
+      notifySuccess('合规审查台账提取完成', '已生成预览结果，请核对后写入累计台账。')
     } catch (e: unknown) {
-      setError(getErrorMessage(e, '提取失败'))
+      const message = getErrorMessage(e, '提取失败')
+      setError(message)
       setStep('upload')
+      notifyError('合规审查台账提取失败', message)
     }
   }
 
@@ -74,9 +79,12 @@ export default function ComplianceFlow({
     try {
       const res = await writeComplianceLedger(item)
       setStep('done')
+      notifySuccess('合规审查台账写入完成', '累计台账已更新，可以直接下载查看。')
       onComplete(res.reply)
     } catch (e: unknown) {
-      setError(getErrorMessage(e, '写入失败'))
+      const message = getErrorMessage(e, '写入失败')
+      setError(message)
+      notifyError('合规审查台账写入失败', message)
     } finally {
       setWriting(false)
     }

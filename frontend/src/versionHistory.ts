@@ -2,6 +2,14 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.27',
+    date: '2026-05-15',
+    changes: [
+      { type: 'feat', text: 'AI 任务完成提醒：合规审查台账提取、写入完成或失败时，页面右上角弹出提示，并让浏览器标题短暂闪动，减少长时间等待后错过结果的情况' },
+      { type: 'feat', text: '支持浏览器系统通知授权：用户点击“开启系统通知”后，后续任务完成可触发 Windows/浏览器通知；未授权或浏览器不支持时仍保留页面提醒和标题闪动' },
+    ],
+  },
+  {
     version: 'v2.26',
     date: '2026-05-15',
     changes: [
