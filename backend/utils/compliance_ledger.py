@@ -243,6 +243,27 @@ def _time_near_signer(section: str, signer_match: re.Match[str]) -> str:
     return before_matches[-1].group(0) if before_matches else ""
 
 
+def _trim_opinion_segment(value: str) -> str:
+    text = re.sub(r"\s+", " ", value or "").strip()
+    text = re.sub(r"(?:中航建设直属|直属|部门|单位)\s*$", "", text).strip()
+    sentence_match = re.search(r"([^。！？；;]*[。！？；;])\s*(?:中航建设直属|直属)?\s*$", text)
+    if sentence_match:
+        return sentence_match.group(1).strip()
+    return text
+
+
+def _opinion_before_signer_match(text: str, signer_match: re.Match[str]) -> str:
+    prefix = text[:signer_match.start()]
+    time_matches = list(_SIGN_TIME_RE.finditer(prefix))
+    if time_matches:
+        prefix = prefix[time_matches[-1].end():]
+    else:
+        section_match = re.search(r"签发意见|签批意见", prefix)
+        if section_match:
+            prefix = prefix[section_match.end():]
+    return _trim_opinion_segment(prefix)
+
+
 def _supplement_countersign_from_text(raw: dict[str, Any], text: str, persons: dict[str, str]) -> dict[str, Any]:
     section = _extract_countersign_section(text)
     if not section:
@@ -345,9 +366,7 @@ def _fix_chief_opinion_from_text(raw: dict[str, Any], text: str) -> dict[str, An
     signer_match = _find_signer_with_timestamp(text, CHIEF_COMPLIANCE_PERSON)
     if not signer_match:
         return raw
-    line_start = text.rfind("\n", 0, signer_match.start())
-    boundary = (line_start + 1) if line_start >= 0 else 0
-    extracted_opinion = _opinion_before_signer(text, boundary)
+    extracted_opinion = _opinion_before_signer_match(text, signer_match)
     if not extracted_opinion or extracted_opinion == "已阅。":
         return raw
     time = _time_near_signer(text, signer_match)
