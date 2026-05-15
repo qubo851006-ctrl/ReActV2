@@ -12,6 +12,7 @@ TEST_TMP_ROOT = BACKEND_DIR / "tests" / "tmp"
 sys.path.insert(0, str(BACKEND_DIR))
 
 from utils.compliance_ledger import (  # noqa: E402
+    _deduplicate_chief_opinion,
     _detail_for_opinion,
     _is_compliance_department,
     append_record,
@@ -589,14 +590,16 @@ class ComplianceSmokeTestPDFScenario(unittest.TestCase):
                 {"department": "西南分公司（四川中航物业）直属", "person": "王永君", "time": "2026-05-09 09:35:13", "opinion_text": "已阅"},
                 {"department": "党群办公室/董事会办公室/行政办公室", "person": "刘芳", "time": "2026-05-09 09:49:20",
                  "opinion_text": "已核，按照重大事项权责清单（2026版），该事项属于经理层审议重大经营管理事项，建议经理层通过总办会审议方式行权。呈胡总、徐勤阅示。"},
+                {"department": "中航建设直属", "person": "徐勤", "time": "2026-05-11 10:40:42",
+                 "opinion_text": "同意提交总办会审议。请履行会前传签程序。"},
                 {"department": "中航建设直属", "person": "胡鹏斌", "time": "2026-05-11 10:21:13",
-                 "opinion_text": "拟同意，建议提交总经理办公会议审议。"},
+                 "opinion_text": "同意提交总办会审议。请履行会前传签程序。拟同意，建议提交总经理办公会议审议。"},
             ],
             "countersign": [],
             "compliance": {"department": "审计部/法务合规部", "person": "李莹", "time": "2026-05-09 10:51:09",
                            "opinion_text": "请奇奇阅核、媛媛阅，明确是否为经理层决策事项，注意合规审查最新要求。"},
             "chief": {"person": "胡鹏斌", "time": "2026-05-11 10:21:13",
-                      "opinion_text": "拟同意，建议提交总经理办公会议审议。"},
+                      "opinion_text": "同意提交总办会审议。请履行会前传签程序。拟同意，建议提交总经理办公会议审议。"},
             "warnings": [],
         }, self.RESPONSIBLE_PERSONS)
 
@@ -626,9 +629,46 @@ class ComplianceSmokeTestPDFScenario(unittest.TestCase):
         party_row = [r for r in rows if "党群" in r["review_unit"]][0]
         self.assertIn("重大事项权责清单", party_row["detail"])
 
-        # 首席合规官短意见 detail 应为 /
+        # 首席合规官意见去重后 detail 应为 /（徐勤意见已被剥离）
         chief_row = [r for r in rows if r["review_unit"] == "首席合规官"][0]
         self.assertEqual(chief_row["review_opinion"], "同意")
+        self.assertEqual(chief_row["detail"], "/")
+
+
+class ComplianceDeduplicateChiefOpinionTests(unittest.TestCase):
+    def test_strips_other_signer_opinion_from_chief(self):
+        chief = {"person": "胡鹏斌", "opinion_text": "同意提交总办会审议。请履行会前传签程序。拟同意，建议提交总经理办公会议审议。"}
+        entries = [
+            {"person": "徐勤", "opinion_text": "同意提交总办会审议。请履行会前传签程序。"},
+            {"person": "胡鹏斌", "opinion_text": "同意提交总办会审议。请履行会前传签程序。拟同意，建议提交总经理办公会议审议。"},
+        ]
+        result = _deduplicate_chief_opinion(chief, entries)
+        self.assertEqual(result["opinion_text"], "拟同意，建议提交总经理办公会议审议。")
+
+    def test_no_change_when_no_overlap(self):
+        chief = {"person": "胡鹏斌", "opinion_text": "拟同意，建议提交总经理办公会议审议。"}
+        entries = [
+            {"person": "徐勤", "opinion_text": "同意提交总办会审议。"},
+            {"person": "胡鹏斌", "opinion_text": "拟同意，建议提交总经理办公会议审议。"},
+        ]
+        result = _deduplicate_chief_opinion(chief, entries)
+        self.assertEqual(result["opinion_text"], "拟同意，建议提交总经理办公会议审议。")
+
+    def test_no_change_when_opinion_too_short(self):
+        chief = {"person": "胡鹏斌", "opinion_text": "同意"}
+        entries = [{"person": "徐勤", "opinion_text": "已阅"}]
+        result = _deduplicate_chief_opinion(chief, entries)
+        self.assertEqual(result["opinion_text"], "同意")
+
+    def test_strips_multiple_other_opinions(self):
+        chief = {"person": "胡鹏斌", "opinion_text": "同意提交总办会审议。请履行会前传签程序。同意，请按规定程序办理。拟同意，建议提交总经理办公会议审议。"}
+        entries = [
+            {"person": "徐勤", "opinion_text": "同意提交总办会审议。请履行会前传签程序。"},
+            {"person": "王总", "opinion_text": "同意，请按规定程序办理。"},
+            {"person": "胡鹏斌", "opinion_text": "同意提交总办会审议。请履行会前传签程序。同意，请按规定程序办理。拟同意，建议提交总经理办公会议审议。"},
+        ]
+        result = _deduplicate_chief_opinion(chief, entries)
+        self.assertEqual(result["opinion_text"], "拟同意，建议提交总经理办公会议审议。")
 
 
 if __name__ == "__main__":

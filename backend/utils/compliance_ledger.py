@@ -299,6 +299,32 @@ def _supplement_countersign_from_text(raw: dict[str, Any], text: str, persons: d
     return next_raw
 
 
+def _deduplicate_chief_opinion(chief: dict[str, Any], entries: list) -> dict[str, Any]:
+    opinion = _clean_text(chief.get("opinion_text"), "")
+    if not opinion or len(opinion) < 10:
+        return chief
+    chief_person = _normalize_person_name(chief.get("person", ""))
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        entry_person = _normalize_person_name(
+            entry.get("person") or entry.get("signer") or ""
+        )
+        if not entry_person or entry_person == chief_person:
+            continue
+        entry_opinion = _clean_text(
+            entry.get("opinion_text") or entry.get("opinion"), ""
+        )
+        if entry_opinion and len(entry_opinion) > 3 and entry_opinion in opinion and entry_opinion != opinion:
+            opinion = opinion.replace(entry_opinion, "").strip()
+            opinion = re.sub(r"^[。，、；\s]+", "", opinion)
+    if opinion != _clean_text(chief.get("opinion_text"), ""):
+        result = dict(chief)
+        result["opinion_text"] = opinion
+        return result
+    return chief
+
+
 def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dict[str, Any]:
     entries = raw.get("approval_entries") or raw.get("approvals") or []
     if not isinstance(entries, list):
@@ -327,6 +353,10 @@ def _apply_approval_entries(raw: dict[str, Any], persons: dict[str, str]) -> dic
                 countersign_item = dict(item)
                 countersign_item["department"] = configured_dept
                 countersign_by_department[dept_key] = countersign_item
+
+    chief = next_raw.get("chief")
+    if chief and isinstance(chief, dict):
+        next_raw["chief"] = _deduplicate_chief_opinion(chief, entries)
 
     if countersign_by_department:
         next_raw["countersign"] = list(countersign_by_department.values())
@@ -438,8 +468,9 @@ def _build_extract_prompt(text: str, persons: dict[str, str]) -> str:
 3. undertaking 取“拟稿单位意见”中对应部门负责人的意见。
 4. countersign 取会签意见中除“审计部/法务合规部”以外的部门负责人意见；多个部门逐个返回。
 5. compliance 取会签意见中的“审计部/法务合规部”负责人意见。
-6. chief 只能取签署人为“胡鹏斌”的那一条意见；不得合并其他领导、其他部门、相邻行的意见。
+6. chief 只能取签署人为”胡鹏斌”的那一条意见；不得合并其他领导、其他部门、相邻行的意见。
 7. approval_entries 逐条列出 OA 中每条独立审批意见，每条必须包含 department、person、time、opinion_text；不得把两个签署人的意见合并成一条。
+12. OA 签发/签批区格式：每条意见的结构是”意见正文”在上、”部门 签署人 时间”在下。每段意见文字只属于其正下方紧邻的签署人，不属于上方或更远的签署人。签发区有多位签署人时，每人只取紧挨其上方的那一段意见，严禁将相邻签署人的意见合并。
 8. 每个意见对象包含 department、person、time、opinion_text、detail、implementation。
 9. “拟同意，建议提交/提请……会议审议”属于同意类意见，不属于“建议补充完善”。
 10. implementation 只能填“/”“已按要求补充完善”“未见落实”“不涉及”。
@@ -469,7 +500,7 @@ def _build_review_prompt(text: str, persons: dict[str, str], extracted: dict[str
 1. 重点校验重大事项标题、董事会/总办会程序、承办单位意见、会签单位意见、合规管理牵头部门意见、首席合规官意见、签署时间、背景材料。
 2. 如模型 A 漏提或错提，请直接修正为最终可写入台账的 JSON。
 3. 返回格式必须与模型 A JSON 完全一致，只返回 JSON 对象，不要解释文字。
-4. 每条审批意见必须按签署人独立校验，首席合规官只能取胡鹏斌本人意见，不得混入其他领导意见。
+4. 每条审批意见必须按签署人独立校验，首席合规官只能取胡鹏斌本人意见，不得混入其他领导意见。签发/签批区每段意见文字只属于其正下方紧邻的签署人。
 5. “拟同意，建议提交/提请……会议审议”应视为同意类意见，不应改成建议补充完善。
 6. 不确定但不影响填表的内容，可在 warnings 中追加提示。
 
