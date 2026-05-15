@@ -594,6 +594,7 @@ def extract_compliance_item(text: str, responsible_persons: dict[str, str] | Non
 
     reviewed = _supplement_countersign_from_text(reviewed, text, persons)
     reviewed = _fix_chief_opinion_from_text(reviewed, text)
+    reviewed.pop("review_rows", None)
     return normalize_extracted_item(reviewed, persons)
 
 

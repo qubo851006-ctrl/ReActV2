@@ -535,6 +535,9 @@ class ComplianceLedgerModelTests(unittest.TestCase):
           "countersign": [],
           "compliance": {{"department": "审计部/法务合规部", "person": "李莹", "time": "2026-05-09 10:51:09", "opinion_text": "已阅。拟同意。", "detail": "", "implementation": "/"}},
           "chief": {{"person": "胡鹏斌", "time": "2026-05-11 10:21:13", "opinion_text": "{merged_chief_text}", "detail": "{merged_chief_text}", "implementation": "/"}},
+          "review_rows": [
+            {{"review_time": "2026-05-11 10:21:13", "review_unit": "首席合规官", "review_opinion": "同意", "detail": "{merged_chief_text}", "implementation": "/"}}
+          ],
           "warnings": []
         }}
         """
