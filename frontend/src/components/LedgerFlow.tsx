@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import { extractLedger, writeLedger, downloadLedgerExcel, getErrorMessage } from '../api'
 import type { LedgerPreview, LedgerCaseData, LedgerStage } from '../types'
+import { useNotifier } from './NotificationContext'
 
 interface Props {
   onComplete: (reply: string) => void
@@ -22,6 +23,7 @@ export default function LedgerFlow({ onComplete, onCancel, visionModel = '' }: P
   const [drag, setDrag] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const logRef = useRef<HTMLDivElement>(null)
+  const { notifySuccess, notifyError } = useNotifier()
 
   function addFiles(newFiles: FileList | null) {
     if (!newFiles) return
@@ -45,9 +47,12 @@ export default function LedgerFlow({ onComplete, onCancel, visionModel = '' }: P
       setPreview(res)
       setEditedCase({ ...res.case_data, stages: res.case_data.stages.map(s => ({ ...s })) })
       setStep('confirm')
+      notifySuccess('案件台账提取完成', '已生成案件预览结果，请核对后写入台账。')
     } catch (e: unknown) {
-      setError(getErrorMessage(e, '处理失败'))
+      const message = getErrorMessage(e, '处理失败')
+      setError(message)
       setStep('upload')
+      notifyError('案件台账提取失败', message)
     }
   }
 
@@ -58,9 +63,12 @@ export default function LedgerFlow({ onComplete, onCancel, visionModel = '' }: P
       const res = await writeLedger(editedCase, preview.match_idx, preview.archive_dir, preview.pending_archive_id ?? '', preview.existing_archive_name ?? '')
       setDoneResult({ case_count: res.case_count, archive_dir: res.archive_dir || preview.archive_dir })
       setStep('done')
+      notifySuccess('案件台账写入完成', `当前台账共 ${res.case_count} 个案件，文书已归档。`)
       onComplete(res.reply)
     } catch (e: unknown) {
-      setError(getErrorMessage(e, '写入失败'))
+      const message = getErrorMessage(e, '写入失败')
+      setError(message)
+      notifyError('案件台账写入失败', message)
     } finally {
       setWriting(false)
     }

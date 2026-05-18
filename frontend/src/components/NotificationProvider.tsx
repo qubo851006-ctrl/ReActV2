@@ -1,26 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-
-type NoticeType = 'success' | 'error' | 'info'
-
-interface NoticeInput {
-  type: NoticeType
-  title: string
-  message?: string
-  titleBadge?: string
-}
+import { NotificationContext } from './NotificationContext'
+import type { NoticeInput, NoticeType, NotificationContextValue } from './NotificationContext'
 
 interface Notice extends NoticeInput {
   id: number
 }
-
-interface NotificationContextValue {
-  notify: (notice: NoticeInput) => void
-  notifySuccess: (title: string, message?: string) => void
-  notifyError: (title: string, message?: string) => void
-}
-
-const NotificationContext = createContext<NotificationContextValue | null>(null)
 
 const TYPE_CLASS: Record<NoticeType, string> = {
   success: 'border-emerald-400/40 bg-emerald-500/15 text-emerald-50',
@@ -40,9 +25,16 @@ const DEFAULT_BADGE: Record<NoticeType, string> = {
   info: '新提醒',
 }
 
+function getInitialNotificationPermission(): NotificationPermission | 'unsupported' {
+  if (typeof window !== 'undefined' && 'Notification' in window) {
+    return window.Notification.permission
+  }
+  return 'unsupported'
+}
+
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notices, setNotices] = useState<Notice[]>([])
-  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>('unsupported')
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(getInitialNotificationPermission)
   const nextId = useRef(1)
   const titleTimer = useRef<number | null>(null)
   const titlePulseTimer = useRef<number | null>(null)
@@ -51,9 +43,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (typeof document !== 'undefined') {
       originalTitle.current = document.title
-    }
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      setNotificationPermission(window.Notification.permission)
     }
     return () => {
       if (titleTimer.current) window.clearTimeout(titleTimer.current)
@@ -161,12 +150,4 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       </div>
     </NotificationContext.Provider>
   )
-}
-
-export function useNotifier() {
-  const context = useContext(NotificationContext)
-  if (!context) {
-    throw new Error('useNotifier must be used inside NotificationProvider')
-  }
-  return context
 }

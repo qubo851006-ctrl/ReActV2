@@ -2,6 +2,14 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.28',
+    date: '2026-05-18',
+    changes: [
+      { type: 'fix', text: '审计问题分析图表复制增加超时保护：截图、生成 PNG、写入剪贴板任一步骤卡住时会自动回到失败状态，不再一直显示“复制中”' },
+      { type: 'feat', text: 'AI 任务完成提醒扩展到培训统计、案件台账、授权请示、三台账合并和审计问题分析，长时间处理完成或失败时均会弹出页面提醒、标题闪动和可选系统通知' },
+    ],
+  },
+  {
     version: 'v2.27',
     date: '2026-05-15',
     changes: [

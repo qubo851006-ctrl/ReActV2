@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { mergeLedgers, downloadMergedExcel, getErrorMessage, type MergeStats } from '../api'
+import { useNotifier } from './NotificationContext'
 
 interface Props {
   onComplete: (reply: string) => void
@@ -82,6 +83,7 @@ export default function LedgerMergeFlow({ onComplete, onCancel }: Props) {
   const [processing, setProcessing] = useState(false)
   const [stats, setStats] = useState<MergeStats | null>(null)
   const [error, setError] = useState('')
+  const { notifySuccess, notifyError } = useNotifier()
 
   const canSubmit = !!contractFile && !processing
 
@@ -92,6 +94,7 @@ export default function LedgerMergeFlow({ onComplete, onCancel }: Props) {
     try {
       const result = await mergeLedgers(contractFile, purchaseFile, financeFile)
       setStats(result)
+      notifySuccess('三台账合并完成', `合同系统 ${result.total_contract} 条，全部匹配 ${result.fully_matched} 条。`)
     } catch (e: unknown) {
       let msg = getErrorMessage(e, '合并失败')
       try {
@@ -99,6 +102,7 @@ export default function LedgerMergeFlow({ onComplete, onCancel }: Props) {
         msg = typeof json.detail === 'string' ? json.detail : msg
       } catch { /* keep original */ }
       setError(msg)
+      notifyError('三台账合并失败', msg)
     } finally {
       setProcessing(false)
     }

@@ -10,7 +10,7 @@ import {
   type ComplianceItem,
   type ComplianceReviewRow,
 } from '../api'
-import { useNotifier } from './NotificationProvider'
+import { useNotifier } from './NotificationContext'
 
 interface Props {
   onComplete: (reply: string) => void

@@ -10,6 +10,7 @@ import {
 } from 'recharts'
 import type { AuditRow } from '../api'
 import { analyzeAudit, downloadAuditExcel, getErrorMessage } from '../api'
+import { useNotifier } from './NotificationContext'
 
 interface Props {
   onComplete: (reply: string) => void
@@ -40,10 +41,45 @@ const L1_CATEGORIES = Object.keys(CATEGORY_TAXONOMY)
 
 const DEFAULT_DOMAINS = ['物业租赁', '酒店公寓', '工程领域', '资产处置', '历史遗留问题']
 const COLORS = ['#6366f1', '#22d3ee', '#f59e0b', '#10b981', '#f43f5e', '#a78bfa']
+const CHART_CAPTURE_TIMEOUT_MS = 10000
+const CLIPBOARD_WRITE_TIMEOUT_MS = 6000
+const BLOB_CREATE_TIMEOUT_MS = 4000
 
 interface PieLabelProps {
   name?: string
   percent?: number
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs)
+    promise.then(
+      value => {
+        window.clearTimeout(timer)
+        resolve(value)
+      },
+      error => {
+        window.clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (blob) {
+        resolve(blob)
+      } else {
+        reject(new Error('图片生成失败'))
+      }
+    }, 'image/png')
+  })
+}
+
+function canWriteImageToClipboard() {
+  return typeof ClipboardItem !== 'undefined' && !!navigator.clipboard?.write
 }
 
 // ── 可编辑标签组 ────────────────────────────────────────────────
@@ -147,25 +183,32 @@ function PieSection({
     const el = containerRef.current
     if (!el) return
     setCopying(true)
+    setCopyError(false)
     el.style.backgroundColor = 'white'
     try {
-      const canvas = await html2canvas(el, {
+      if (!canWriteImageToClipboard()) {
+        throw new Error('当前浏览器不支持图片复制到剪贴板')
+      }
+
+      const canvas = await withTimeout(html2canvas(el, {
         backgroundColor: '#ffffff',
         scale: 2,
         useCORS: true,
+        imageTimeout: 5000,
+        logging: false,
         width: el.scrollWidth,
         height: el.scrollHeight,
         windowWidth: el.scrollWidth,
         windowHeight: el.scrollHeight,
-      })
-      await new Promise<void>((resolve, reject) => {
-        canvas.toBlob(async (blob) => {
-          if (!blob) { reject(new Error('截图失败')); return }
-          navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-            .then(resolve).catch(reject)
-        })
-      })
-    } catch {
+      }), CHART_CAPTURE_TIMEOUT_MS, '图表截图超时')
+      const blob = await withTimeout(canvasToPngBlob(canvas), BLOB_CREATE_TIMEOUT_MS, '图片生成超时')
+      await withTimeout(
+        navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]),
+        CLIPBOARD_WRITE_TIMEOUT_MS,
+        '剪贴板写入超时',
+      )
+    } catch (e) {
+      console.warn('Copy audit chart failed:', e)
       setCopyError(true)
       setTimeout(() => setCopyError(false), 3000)
     } finally {
@@ -233,6 +276,7 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
   const [error, setError] = useState('')
   const [downloading, setDownloading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const { notifySuccess, notifyError } = useNotifier()
 
   // ── 文件选择 ──
 
@@ -263,9 +307,12 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
       const result = await analyzeAudit(file, domains)
       setRows(result.rows)
       setPhase('review')
+      notifySuccess('审计问题分析完成', `共分析 ${result.rows.length} 条问题，请审查确认分类结果。`)
     } catch (e: unknown) {
-      setError(getErrorMessage(e, '分析失败，请重试'))
+      const message = getErrorMessage(e, '分析失败，请重试')
+      setError(message)
       setPhase('upload')
+      notifyError('审计问题分析失败', message)
     }
   }
 
@@ -304,7 +351,9 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
       const baseName = file?.name.replace(/\.(xlsx|xls)$/i, '') || '审计问题分析结果'
       await downloadAuditExcel(rows, baseName)
     } catch (e: unknown) {
-      setError(getErrorMessage(e, '下载失败'))
+      const message = getErrorMessage(e, '下载失败')
+      setError(message)
+      notifyError('审计分析结果下载失败', message)
     } finally {
       setDownloading(false)
     }
@@ -562,7 +611,10 @@ export default function AuditFlow({ onComplete, onCancel }: Props) {
               重新上传
             </button>
             <button
-              onClick={() => setPhase('report')}
+              onClick={() => {
+                setPhase('report')
+                notifySuccess('审计分析报告已生成', '两张分布图已生成，可以复制图片或下载 Excel。')
+              }}
               className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm rounded-lg transition-colors"
             >
               生成报告
