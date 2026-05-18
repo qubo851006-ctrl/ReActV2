@@ -50,6 +50,8 @@ interface PieLabelProps {
   percent?: number
 }
 
+type CopyState = 'idle' | 'copying' | 'failed' | 'downloaded'
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs)
@@ -80,6 +82,15 @@ function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
 
 function canWriteImageToClipboard() {
   return typeof ClipboardItem !== 'undefined' && !!navigator.clipboard?.write
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 // ── 可编辑标签组 ────────────────────────────────────────────────
@@ -168,8 +179,7 @@ function PieSection({
   suffix: string
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const [copying, setCopying] = useState(false)
-  const [copyError, setCopyError] = useState(false)
+  const [copyState, setCopyState] = useState<CopyState>('idle')
 
   const sorted = [...data].sort((a, b) => b.value - a.value)
   const top = sorted[0]
@@ -182,14 +192,10 @@ function PieSection({
   async function copyChart() {
     const el = containerRef.current
     if (!el) return
-    setCopying(true)
-    setCopyError(false)
+    let fallbackBlob: Blob | null = null
+    setCopyState('copying')
     el.style.backgroundColor = 'white'
     try {
-      if (!canWriteImageToClipboard()) {
-        throw new Error('当前浏览器不支持图片复制到剪贴板')
-      }
-
       const canvas = await withTimeout(html2canvas(el, {
         backgroundColor: '#ffffff',
         scale: 2,
@@ -202,20 +208,45 @@ function PieSection({
         windowHeight: el.scrollHeight,
       }), CHART_CAPTURE_TIMEOUT_MS, '图表截图超时')
       const blob = await withTimeout(canvasToPngBlob(canvas), BLOB_CREATE_TIMEOUT_MS, '图片生成超时')
+      fallbackBlob = blob
+      if (!canWriteImageToClipboard()) {
+        downloadBlob(blob, `${title}.png`)
+        setCopyState('downloaded')
+        setTimeout(() => setCopyState('idle'), 3000)
+        return
+      }
       await withTimeout(
         navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]),
         CLIPBOARD_WRITE_TIMEOUT_MS,
         '剪贴板写入超时',
       )
+      setCopyState('idle')
     } catch (e) {
       console.warn('Copy audit chart failed:', e)
-      setCopyError(true)
-      setTimeout(() => setCopyError(false), 3000)
+      if (fallbackBlob) {
+        downloadBlob(fallbackBlob, `${title}.png`)
+        setCopyState('downloaded')
+        setTimeout(() => setCopyState('idle'), 3000)
+      } else {
+        setCopyState('failed')
+        setTimeout(() => setCopyState('idle'), 3000)
+      }
     } finally {
       el.style.backgroundColor = ''
-      setCopying(false)
+      if (copyState === 'copying') setCopyState('idle')
     }
   }
+
+  const copying = copyState === 'copying'
+  const copyFailed = copyState === 'failed'
+  const copiedToDownload = copyState === 'downloaded'
+  const buttonText = copying
+    ? '复制中…'
+    : copiedToDownload
+      ? '已下载PNG'
+      : copyFailed
+        ? '复制失败'
+        : '⬜ 复制图片'
 
   return (
     <div className="relative bg-slate-800/60 border border-slate-700 rounded-2xl p-5 mb-4">
@@ -224,13 +255,15 @@ function PieSection({
         onClick={copyChart}
         disabled={copying}
         className={`absolute top-3 right-3 z-10 text-xs px-2.5 py-1 rounded-md transition-colors disabled:opacity-50 ${
-          copyError
+          copiedToDownload
+            ? 'bg-amber-700/60 text-amber-100'
+            : copyFailed
             ? 'bg-red-700/60 text-red-200'
             : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
         }`}
-        title={copyError ? '复制失败，请截图保存' : '复制图片到剪贴板'}
+        title={copiedToDownload ? '浏览器未允许复制图片，已自动下载 PNG' : copyFailed ? '复制失败，请截图保存' : '复制图片到剪贴板'}
       >
-        {copying ? '复制中…' : copyError ? '复制失败' : '⬜ 复制图片'}
+        {buttonText}
       </button>
       {/* 截图区域：不含按钮 */}
       <div ref={containerRef}>

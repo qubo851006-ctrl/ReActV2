@@ -2,6 +2,13 @@ import type { VersionEntry } from './branding'
 
 export const VERSION_ENTRIES: VersionEntry[] = [
   {
+    version: 'v2.29',
+    date: '2026-05-18',
+    changes: [
+      { type: 'fix', text: '审计图表复制增加降级处理：浏览器因 HTTP 访问或权限限制拒绝复制图片时，自动下载 PNG 文件，并在按钮上提示“已下载PNG”，避免只显示复制失败' },
+    ],
+  },
+  {
     version: 'v2.28',
     date: '2026-05-18',
     changes: [
